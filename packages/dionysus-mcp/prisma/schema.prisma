@@ -16,6 +16,7 @@ model Business {
   brandKits       BrandKit[]
   llmCalls        LlmCall[]
   creditEntries   CreditLedger[]
+  cases           Case[]
 }
 
 model Product {
@@ -66,6 +67,24 @@ model CreditLedger {
   reason     String
   ref        String?
   ts         DateTime @default(now())
+
+  @@index([businessId])
+}
+
+model Case {
+  id                 String   @id @default(cuid())
+  businessId         String
+  business           Business @relation(fields: [businessId], references: [id])
+  name               String
+  platform           String
+  mode               String
+  rank               Int
+  historicalArcJson  String
+  modernizedPlanJson String
+  insight            String
+  sourcesJson        String
+  confidence         Float
+  createdAt          DateTime @default(now())
 
   @@index([businessId])
 }

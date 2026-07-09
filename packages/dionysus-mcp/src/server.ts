@@ -5,6 +5,7 @@ import type { Identity } from "./identity.js";
 import { readProduct } from "./tools/read-product.js";
 import { extractBrand } from "./tools/extract-brand.js";
 import { recordCost, checkBudget } from "./tools/cost-budget.js";
+import { persistCase, type CaseInput } from "./tools/persist-case.js";
 
 /** Single source of truth for tool input shapes.
  *  INVARIANT (D27.1): no shape ever includes businessId — identity is ambient. */
@@ -18,6 +19,17 @@ export const TOOL_SCHEMAS = {
     note: z.string().optional(),
   },
   check_budget: {},
+  persist_case: {
+    name: z.string(),
+    platform: z.string(),
+    mode: z.string(),
+    rank: z.number().int(),
+    historicalArc: z.unknown(),
+    modernizedPlan: z.unknown(),
+    insight: z.string(),
+    sources: z.unknown(),
+    confidence: z.number().min(0).max(1),
+  },
 } satisfies Record<string, ZodRawShape>;
 
 function asText(result: unknown): CallToolResult {
@@ -65,6 +77,16 @@ export function buildServer(identity: Identity): McpServer {
       inputSchema: TOOL_SCHEMAS.check_budget,
     },
     async () => asText(await checkBudget(identity)),
+  );
+
+  server.registerTool(
+    "persist_case",
+    {
+      description:
+        "Persist a researched Case (historical arc + modernized plan + sourced insight) scoped to the ambient identity. JSON payloads are stored as strings (SQLite).",
+      inputSchema: TOOL_SCHEMAS.persist_case,
+    },
+    async (args) => asText(await persistCase(identity, args as CaseInput)),
   );
 
   return server;
