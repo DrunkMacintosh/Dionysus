@@ -11,6 +11,9 @@ import {
   persistRoute,
   persistWaypoint,
   upsertRouteAction,
+  OBJECTIVE_STATUSES,
+  ROUTE_STATUSES,
+  WAYPOINT_STATUSES,
   type ObjectiveInput,
   type RouteInput,
   type WaypointInput,
@@ -43,15 +46,15 @@ export const TOOL_SCHEMAS = {
   },
   create_objective: {
     kind: z.string().min(1), target: z.string().min(1), metric: z.string().min(1),
-    dueDate: z.string().optional(), status: z.string().optional(),
+    dueDate: z.string().optional(), status: z.enum(OBJECTIVE_STATUSES).optional(),
   },
   persist_route: {
     objectiveId: z.string().min(1), source: z.enum(["case", "composed"]),
-    caseRef: z.string().optional(), status: z.string().optional(),
+    caseRef: z.string().optional(), status: z.enum(ROUTE_STATUSES).optional(),
   },
   persist_waypoint: {
     routeId: z.string().min(1), order: z.number().int().min(1),
-    title: z.string().min(1), goal: z.string().min(1), status: z.string().optional(),
+    title: z.string().min(1), goal: z.string().min(1), status: z.enum(WAYPOINT_STATUSES).optional(),
   },
   upsert_route_action: {
     waypointId: z.string().min(1), employeeRole: z.string().min(1), type: z.string().min(1),

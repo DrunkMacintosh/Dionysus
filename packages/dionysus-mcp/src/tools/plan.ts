@@ -1,12 +1,23 @@
 import { prisma } from "../db.js";
 import type { Identity } from "../identity.js";
 
-export type ObjectiveInput = { kind: string; target: string; metric: string; dueDate?: string; status?: string };
-export type RouteInput = { objectiveId: string; source: "case" | "composed"; caseRef?: string; status?: string };
-export type WaypointInput = { routeId: string; order: number; title: string; goal: string; status?: string };
+export const OBJECTIVE_STATUSES = ["active", "paused", "done"] as const;
+export const ROUTE_STATUSES = ["proposed", "active", "done"] as const;
+export const WAYPOINT_STATUSES = ["locked", "active", "done"] as const;
+
+function assertStatus(value: string, allowed: readonly string[], label: string): void {
+  if (!allowed.includes(value)) {
+    throw new Error(`Invalid ${label} status "${value}" (allowed: ${allowed.join(", ")}).`);
+  }
+}
+
+export type ObjectiveInput = { kind: string; target: string; metric: string; dueDate?: string; status?: (typeof OBJECTIVE_STATUSES)[number] };
+export type RouteInput = { objectiveId: string; source: "case" | "composed"; caseRef?: string; status?: (typeof ROUTE_STATUSES)[number] };
+export type WaypointInput = { routeId: string; order: number; title: string; goal: string; status?: (typeof WAYPOINT_STATUSES)[number] };
 export type RouteActionInput = { waypointId: string; employeeRole: string; type: string; rationale?: string; features?: unknown };
 
 export async function createObjective(identity: Identity, input: ObjectiveInput): Promise<{ objectiveId: string }> {
+  if (input.status !== undefined) assertStatus(input.status, OBJECTIVE_STATUSES, "objective");
   const row = await prisma.objective.create({ data: {
     businessId: identity.businessId, kind: input.kind, target: input.target, metric: input.metric,
     dueDate: input.dueDate ? new Date(input.dueDate) : null, status: input.status ?? "active" } });
@@ -14,6 +25,7 @@ export async function createObjective(identity: Identity, input: ObjectiveInput)
 }
 
 export async function persistRoute(identity: Identity, input: RouteInput): Promise<{ routeId: string }> {
+  if (input.status !== undefined) assertStatus(input.status, ROUTE_STATUSES, "route");
   const obj = await prisma.objective.findFirst({ where: { id: input.objectiveId, businessId: identity.businessId } });
   if (!obj) throw new Error(`Objective ${input.objectiveId} not found in this business scope.`);
   const row = await prisma.route.create({ data: {
@@ -23,6 +35,7 @@ export async function persistRoute(identity: Identity, input: RouteInput): Promi
 }
 
 export async function persistWaypoint(identity: Identity, input: WaypointInput): Promise<{ waypointId: string }> {
+  if (input.status !== undefined) assertStatus(input.status, WAYPOINT_STATUSES, "waypoint");
   const route = await prisma.route.findFirst({ where: { id: input.routeId, businessId: identity.businessId } });
   if (!route) throw new Error(`Route ${input.routeId} not found in this business scope.`);
   const row = await prisma.routeWaypoint.create({ data: {

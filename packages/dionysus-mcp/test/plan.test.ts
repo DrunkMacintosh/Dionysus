@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { prisma } from "../src/db.js";
 import { createObjective, persistRoute, persistWaypoint, upsertRouteAction } from "../src/tools/plan.js";
+import { OBJECTIVE_STATUSES, ROUTE_STATUSES, WAYPOINT_STATUSES } from "../src/tools/plan.js";
 
 describe("plan-layer schema", () => {
   beforeAll(async () => {
@@ -58,5 +59,34 @@ describe("plan tools (identity-scoped)", () => {
       { kind: "k", target: "1", metric: "m" });
     await expect(persistRoute({ businessId: "biz_plan2" }, { objectiveId, source: "composed" }))
       .rejects.toThrow(/not found|scope/i);
+  });
+});
+
+describe("status-enum hardening (function layer)", () => {
+  const TEST_BIZ = "biz_enum";
+  beforeAll(async () => {
+    await prisma.business.upsert({ where: { id: TEST_BIZ },
+      create: { id: TEST_BIZ, name: "Enum Co" }, update: {} });
+  });
+
+  it("createObjective rejects an out-of-enum status", async () => {
+    await expect(createObjective({ businessId: TEST_BIZ },
+      { kind: "k", target: "1", metric: "m", status: "garbage" as never }))
+      .rejects.toThrow(/invalid objective status/i);
+  });
+
+  it("persistRoute and persistWaypoint reject out-of-enum statuses", async () => {
+    const { objectiveId } = await createObjective({ businessId: TEST_BIZ }, { kind: "k", target: "1", metric: "m" });
+    await expect(persistRoute({ businessId: TEST_BIZ }, { objectiveId, source: "case", status: "garbage" as never }))
+      .rejects.toThrow(/invalid route status/i);
+    const { routeId } = await persistRoute({ businessId: TEST_BIZ }, { objectiveId, source: "case" });
+    await expect(persistWaypoint({ businessId: TEST_BIZ }, { routeId, order: 91, title: "t", goal: "g", status: "garbage" as never }))
+      .rejects.toThrow(/invalid waypoint status/i);
+  });
+
+  it("exports the ratified enums", () => {
+    expect(OBJECTIVE_STATUSES).toEqual(["active", "paused", "done"]);
+    expect(ROUTE_STATUSES).toEqual(["proposed", "active", "done"]);
+    expect(WAYPOINT_STATUSES).toEqual(["locked", "active", "done"]);
   });
 });

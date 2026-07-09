@@ -45,3 +45,16 @@ describe("buildServer", () => {
     expect(server).toBeTruthy();
   });
 });
+
+describe("plan-tool status enums (MCP boundary)", () => {
+  it("plan-tool status schemas reject garbage at the MCP boundary", () => {
+    for (const key of ["create_objective", "persist_route", "persist_waypoint"] as const) {
+      const shape = TOOL_SCHEMAS[key] as Record<string, z.ZodTypeAny>;
+      expect(shape.status.safeParse("garbage").success).toBe(false);
+      expect(shape.status.safeParse(undefined).success).toBe(true); // still optional
+    }
+    expect((TOOL_SCHEMAS.create_objective as Record<string, z.ZodTypeAny>).status.safeParse("active").success).toBe(true);
+    expect((TOOL_SCHEMAS.persist_route as Record<string, z.ZodTypeAny>).status.safeParse("proposed").success).toBe(true);
+    expect((TOOL_SCHEMAS.persist_waypoint as Record<string, z.ZodTypeAny>).status.safeParse("locked").success).toBe(true);
+  });
+});
