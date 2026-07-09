@@ -16,6 +16,7 @@ import {
   type WaypointInput,
   type RouteActionInput,
 } from "./tools/plan.js";
+import { persistAsset, type AssetInput } from "./tools/asset.js";
 
 /** Single source of truth for tool input shapes.
  *  INVARIANT (D27.1): no shape ever includes businessId — identity is ambient. */
@@ -55,6 +56,10 @@ export const TOOL_SCHEMAS = {
   upsert_route_action: {
     waypointId: z.string().min(1), employeeRole: z.string().min(1), type: z.string().min(1),
     rationale: z.string().optional(), features: z.unknown(),
+  },
+  persist_asset: {
+    channel: z.string().min(1), kind: z.string().min(1), content: z.unknown(),
+    routeActionId: z.string().optional(),
   },
 } satisfies Record<string, ZodRawShape>;
 
@@ -149,6 +154,15 @@ export function buildServer(identity: Identity): McpServer {
       inputSchema: TOOL_SCHEMAS.upsert_route_action,
     },
     async (args) => asText(await upsertRouteAction(identity, args as RouteActionInput)),
+  );
+
+  server.registerTool(
+    "persist_asset",
+    {
+      description: "Persist a draft asset (optionally linked to a route action).",
+      inputSchema: TOOL_SCHEMAS.persist_asset,
+    },
+    async (args) => asText(await persistAsset(identity, args as AssetInput)),
   );
 
   return server;

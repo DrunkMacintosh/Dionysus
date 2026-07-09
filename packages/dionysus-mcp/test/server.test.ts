@@ -32,6 +32,11 @@ describe("D27.1 — tool schemas", () => {
     }
     expect(Object.keys(TOOL_SCHEMAS.upsert_route_action)).not.toContain("status");
   });
+
+  it("persist_asset is registered and businessId-free", () => {
+    expect(Object.keys(TOOL_SCHEMAS)).toContain("persist_asset");
+    expect(Object.keys(TOOL_SCHEMAS.persist_asset)).not.toContain("businessId");
+  });
 });
 
 describe("buildServer", () => {
