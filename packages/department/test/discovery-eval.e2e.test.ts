@@ -42,8 +42,12 @@ function evalHarness(): Harness {
       return { finalOutput: JSON.stringify({ historicalArc: [], modernizedPlan: {}, insight: "i", confidence: 0.9 }) };
     },
     async completeOnce(_m: string, _s: string, user: string) {
-      // The judge only says YES when the source text really supports the claim.
-      return user.includes("launched on Hacker News") && user.includes("Supabase launched on Hacker News") ? "YES" : "NO";
+      // Key ONLY on source-body text ("hit 10k stars" is in /real's page body,
+      // never in any claim string) so a YES REQUIRES the fetched source — makes
+      // the source-fetch load-bearing for the EXTRACTED positive control. Keying
+      // on the claim text alone would let a fetch-bypassing self-judge pass the
+      // gate vacuously (the §6.2 fetch-and-entail property would go unproven).
+      return user.includes("hit 10k stars") ? "YES" : "NO";
     },
   };
 }
@@ -65,7 +69,7 @@ describe("§15 eval gate — sourcing invariants under attack", () => {
 
   it("confidence is capped down when most claims are INFERRED", async () => {
     const rows = await prisma.case.findMany({ where: { businessId: A.businessId } });
-    expect(rows[0]!.confidence).toBeLessThan(0.9); // strategist said 0.9; cap applied
+    expect(rows[0]!.confidence).toBeCloseTo(0.6); // strategist 0.9 capped to 1 − (4/5)×0.5 = 0.6
   });
 
   it("stage-1 tenant isolation is untouched by the department (regression)", async () => {
