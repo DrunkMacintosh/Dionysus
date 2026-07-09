@@ -15,24 +15,36 @@ import { scrapeLadder } from "dionysus-mcp/lib/scrape/ladder";
 import type { SafeFetchOptions } from "dionysus-mcp/lib/ssrf";
 
 // D20 break-out defense. Attacker-controlled content (page title / description
-// / text) OR the fetched url can itself contain the literal fence markers. If a
-// forged `<<<END-UNTRUSTED-CONTENT>>>` survived INSIDE the fenced region, a
-// downstream model would see the fence close early and read everything after it
-// as trusted instructions. We defang any marker-lookalike sequence inside the
-// content/url by inserting a zero-width space (U+200B) between the leading `<`s:
-// it is no longer the literal marker the checker/prompts key on, yet stays
-// human-readable. The OUTER real markers are written from string literals below
-// and are NEVER passed through `neutralize`, so they stay byte-exact — Task 4's
-// prompts and Task 6's fixed-marker checker depend on those exact strings, so
-// this is deliberately a fixed defang, not a random nonce.
-const neutralize = (s: string): string =>
-  s.replace(/<<<(\/?(?:END-)?UNTRUSTED-CONTENT)/gi, "<​<​<$1");
+// / text), a fetched url, a Brave search snippet, or a scraped product blurb can
+// itself contain the literal fence markers. If a forged `<<<END-UNTRUSTED-CONTENT>>>`
+// survived INSIDE the fenced region, a downstream model would see the fence close
+// early and read everything after it as trusted instructions. We defang any
+// marker-lookalike sequence by inserting a zero-width space (U+200B) between the
+// leading `<`s: it is no longer the literal marker the checker/prompts key on,
+// yet stays human-readable. The OUTER real markers are written from string
+// literals in `fence` below and are NEVER passed through `neutralizeFenceMarkers`,
+// so they stay byte-exact — Task 4's prompts and Task 6's fixed-marker checker
+// depend on those exact strings, so this is deliberately a fixed defang, not a
+// random nonce.
+//
+// Exported so every untrusted-content-into-prompt path (fetch_page, web_search,
+// scraped product description) shares ONE fencing implementation (D20) instead
+// of re-deriving the marker logic per call site.
+export function neutralizeFenceMarkers(s: string): string {
+  return s.replace(/<<<(\/?(?:END-)?UNTRUSTED-CONTENT)/gi, "<​<​<$1");
+}
+
+// Wrap arbitrary untrusted text as fenced DATA. `label` is echoed into the
+// opening marker for provenance (e.g. `url=...`, `web-search-results`); both the
+// label and the content are neutralized so neither can forge a marker.
+export function fence(label: string, content: string): string {
+  return `<<<UNTRUSTED-CONTENT ${neutralizeFenceMarkers(label)}>>>\n${neutralizeFenceMarkers(content)}\n<<<END-UNTRUSTED-CONTENT>>>`;
+}
 
 export async function fetchPageFenced(url: string, fetchOpts?: SafeFetchOptions): Promise<string> {
   const r = await scrapeLadder(url, fetchOpts);
   const payload = r.tier === 4
     ? `COULD NOT READ (${r.error ?? "unknown"})`
     : [r.title, r.description, r.text].filter(Boolean).join("\n");
-  const safeUrl = neutralize(url);
-  return `<<<UNTRUSTED-CONTENT url=${safeUrl}>>>\n${neutralize(payload)}\n<<<END-UNTRUSTED-CONTENT>>>`;
+  return fence(`url=${url}`, payload);
 }
