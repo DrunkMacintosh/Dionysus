@@ -4,7 +4,7 @@ import type { Identity } from "../identity.js";
 import { prisma } from "../db.js";
 import { computeCostUsd } from "../lib/pricing.js";
 import { gateBudget, type GateErrorBody } from "./budget-gate.js";
-import { usageFromJson, type GatewayUsage } from "./usage.js";
+import { usageFromJson, createSseUsageScanner, type GatewayUsage } from "./usage.js";
 
 export type GatewayConfig = {
   port: number;
@@ -165,14 +165,32 @@ export function createGatewayHandler(
     res.end(text);
   }
 
-  // Implemented in Task 4 — placeholder keeps Task 3 compiling and failing loudly if hit.
   async function handleStream(
     res: ServerResponse,
     upstreamRes: Awaited<ReturnType<typeof request>>,
-    _model: string,
+    model: string,
   ): Promise<void> {
-    await upstreamRes.body.dump();
-    sendJson(res, 501, errorBody("not_implemented", "Streaming lands in the next task."));
+    // Client-abort guard: if the client disconnects mid-stream, stop pumping a
+    // dead connection. Destroying the upstream body makes the for-await below
+    // throw, which lands in the catch-all (headersSent → res.end()).
+    res.on("close", () => {
+      if (!res.writableEnded) upstreamRes.body.destroy();
+    });
+    res.writeHead(upstreamRes.statusCode, {
+      "content-type": String(upstreamRes.headers["content-type"] ?? "text/event-stream"),
+    });
+    const scanner = createSseUsageScanner();
+    for await (const chunk of upstreamRes.body) {
+      const buf = chunk as Buffer;
+      scanner.push(buf.toString("utf8"));
+      res.write(buf);
+    }
+    // Write BEFORE ending the response: the client observing stream-end
+    // may immediately assert on the ledger (and accounting is at-most-once).
+    // Bytes are already sent, so a metering failure here cannot withhold the
+    // response — the structured stderr log from recordOrReport is the record.
+    await recordOrReport(identity, model, scanner.result());
+    res.end();
   }
 
   return (req, res) => {
