@@ -66,3 +66,56 @@ describe("draftWaypoint (parallel fan-out)", () => {
       .rejects.toThrow(/waypoint .* not found|scope/i);
   });
 });
+
+// Regression (finding I1): server-derived channel/kind are AUTHORITATIVE (clamped);
+// the model's self-reported draft.channel/draft.kind are advisory and must NOT be
+// persisted or returned as the labels. A divergent harness deliberately lies.
+describe("draftWaypoint clamp — server channel/kind authoritative, model output advisory", () => {
+  const DIVERGENT = { businessId: "biz_draft_divergent" };
+  let wpId = "";
+  let actionId = "";
+
+  beforeAll(async () => {
+    await prisma.asset.deleteMany({ where: { businessId: DIVERGENT.businessId } });
+    await prisma.routeAction.deleteMany({ where: { businessId: DIVERGENT.businessId } });
+    await prisma.routeWaypoint.deleteMany({ where: { businessId: DIVERGENT.businessId } });
+    await prisma.route.deleteMany({ where: { businessId: DIVERGENT.businessId } });
+    await prisma.objective.deleteMany({ where: { businessId: DIVERGENT.businessId } });
+    await prisma.business.upsert({ where: { id: DIVERGENT.businessId },
+      create: { id: DIVERGENT.businessId, name: "Divergent Co", maxTokensPerDay: 100000 },
+      update: { maxTokensPerDay: 100000 } });
+    const obj = await prisma.objective.create({ data: { businessId: DIVERGENT.businessId, kind: "signups", target: "100", metric: "users", status: "active" } });
+    const route = await prisma.route.create({ data: { businessId: DIVERGENT.businessId, objectiveId: obj.id, source: "case", status: "proposed" } });
+    const wp = await prisma.routeWaypoint.create({ data: { businessId: DIVERGENT.businessId, routeId: route.id, order: 1, title: "Launch", goal: "20 signups", status: "active" } });
+    wpId = wp.id;
+    // authoritative: featuresJson.channel = "x", type = "post"
+    const a = await prisma.routeAction.create({ data: { businessId: DIVERGENT.businessId, waypointId: wp.id, employeeRole: "copywriter", type: "post", status: "proposed", featuresJson: JSON.stringify({ channel: "x" }) } });
+    actionId = a.id;
+  });
+
+  // A harness that LIES: reports channel "twitter" / kind "reply", diverging from the
+  // action's authoritative featuresJson.channel ("x") and type ("post").
+  function divergentHarness(): Harness {
+    return {
+      async runAgent(_def: AgentDef, _input: string) {
+        return { finalOutput: JSON.stringify({ channel: "twitter", kind: "reply", content: { title: "T", body: "Draft body" } }) };
+      },
+      async completeOnce() { return "unused"; },
+    };
+  }
+
+  it("persists + returns the server-derived channel/kind, ignoring the model's self-reported values", async () => {
+    const res = await draftWaypoint(DIVERGENT, { waypointId: wpId }, { harness: divergentHarness(), models: { brain: "fake" } });
+    // returned draft entry carries the authoritative labels, not the model's lie
+    expect(res.drafts).toHaveLength(1);
+    expect(res.drafts[0].channel).toBe("x");
+    expect(res.drafts[0].kind).toBe("post");
+    // persisted Asset row (read back) carries the authoritative labels too
+    const asset = await prisma.asset.findFirst({ where: { routeActionId: actionId } });
+    expect(asset).toBeTruthy();
+    expect(asset!.channel).toBe("x");
+    expect(asset!.kind).toBe("post");
+    // the model's copy IS still the payload (content is not clamped)
+    expect(JSON.parse(asset!.contentJson).body).toBe("Draft body");
+  });
+});

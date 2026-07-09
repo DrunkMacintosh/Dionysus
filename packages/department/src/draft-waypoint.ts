@@ -64,10 +64,13 @@ export async function draftWaypoint(identity: Identity, input: { waypointId: str
     const ctx = `Action: draft a ${kind} for the "${channel}" channel.\nWaypoint goal: ${wp.goal}\nRationale: ${action.rationale ?? ""}`;
     const raw = await deps.harness.runAgent(def, ctx);
     const draft = await parseDraft(raw.finalOutput, async (err) => (await deps.harness.runAgent(def, err)).finalOutput);
+    // Clamp: the server-derived channel/kind are authoritative for labeling — persist
+    // and return THOSE, never draft.channel/draft.kind (the model's self-report is
+    // advisory only). Only draft.content (the model's copy) is trusted as the payload.
     const { assetId } = await persistAsset(identity, {
-      channel: draft.channel, kind: draft.kind, content: draft.content, routeActionId: action.id });
+      channel, kind, content: draft.content, routeActionId: action.id });
     await setActionAsset(identity, action.id, assetId);
-    return { actionId: action.id, assetId, channel: draft.channel, kind: draft.kind, body: draft.content.body };
+    return { actionId: action.id, assetId, channel, kind, body: draft.content.body };
   }));
 
   return { waypointId: input.waypointId, drafts };
