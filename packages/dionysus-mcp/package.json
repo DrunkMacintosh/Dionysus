@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "postinstall": "prisma generate",
     "test": "node scripts/reset-test-db.mjs && vitest run",
     "test:unit": "vitest run",
     "build": "tsc -p tsconfig.json",

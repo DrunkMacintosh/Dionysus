@@ -76,21 +76,44 @@ function ipv6ToHextets(ip: string): number[] | null {
   return hextets;
 }
 
-// If the IPv6 address carries an embedded IPv4 — v4-mapped (::ffff:0:0/96) or
-// deprecated v4-compatible (::/96) — return that IPv4 as a dotted string, else
-// null. Detector triggers ONLY when the first five hextets are exactly zero and
-// hextet 6 ∈ {0x0000, 0xffff}; any global-unicast address (2000::/3, nonzero
-// leading hextet) can never match, so normal IPv6 is never mistaken for v4.
+// Reconstruct a dotted-quad IPv4 from two adjacent 16-bit hextets (high, low).
+function hextetsToDottedQuad(hi: number, lo: number): string {
+  return `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+}
+
+// If the IPv6 address carries an embedded IPv4 — return that IPv4 as a dotted
+// string, else null. Four embeddings are decoded, each with an exact prefix
+// match so no global-unicast address can be mistaken for embedded v4:
+//   * v4-mapped   (::ffff:0:0/96) — hextets 0-4 zero, hextet 5 == 0xffff, v4 in 6-7
+//   * v4-compat   (::/96)         — hextets 0-4 zero, hextet 5 == 0,      v4 in 6-7
+//   * NAT64       (64:ff9b::/96)  — hextets 0-5 == [0x0064,0xff9b,0,0,0,0], v4 in 6-7
+//   * 6to4        (2002::/16)     — hextet 0 == 0x2002,                    v4 in 1-2
+// The reconstructed v4 is re-classified by isPrivateIp, so a NAT64/6to4 wrapper
+// around a private/metadata address (e.g. 64:ff9b::a9fe:a9fe → 169.254.169.254)
+// is blocked, while one wrapping a public address (64:ff9b::808:808 → 8.8.8.8)
+// stays allowed. Normal global unicast (2001:db8::1 starts 0x2001, not 0x2002;
+// 2606:4700:4700::1111 starts 0x2606) never matches any prefix → returns null.
 function embeddedIpv4(hextets: number[]): string | null {
   const firstFiveZero =
     hextets[0] === 0 && hextets[1] === 0 && hextets[2] === 0 &&
     hextets[3] === 0 && hextets[4] === 0;
-  if (!firstFiveZero) return null;
-  const h6 = hextets[5];
-  if (h6 !== 0 && h6 !== 0xffff) return null;
-  const h7 = hextets[6]!;
-  const h8 = hextets[7]!;
-  return `${(h7 >> 8) & 0xff}.${h7 & 0xff}.${(h8 >> 8) & 0xff}.${h8 & 0xff}`;
+  if (firstFiveZero) {
+    const h6 = hextets[5];
+    if (h6 !== 0 && h6 !== 0xffff) return null; // v4-mapped or v4-compatible only
+    return hextetsToDottedQuad(hextets[6]!, hextets[7]!);
+  }
+  // NAT64 well-known prefix 64:ff9b::/96 → hextets 0-5 == [0x0064,0xff9b,0,0,0,0].
+  if (
+    hextets[0] === 0x0064 && hextets[1] === 0xff9b &&
+    hextets[2] === 0 && hextets[3] === 0 && hextets[4] === 0 && hextets[5] === 0
+  ) {
+    return hextetsToDottedQuad(hextets[6]!, hextets[7]!);
+  }
+  // 6to4 2002::/16 → leading hextet 0x2002, embedded v4 in hextets 1-2.
+  if (hextets[0] === 0x2002) {
+    return hextetsToDottedQuad(hextets[1]!, hextets[2]!);
+  }
+  return null;
 }
 
 export function isPrivateIp(ip: string): boolean {
@@ -236,43 +259,53 @@ export async function safeFetch(
     };
     const agent = new Agent({ connect: { lookup: guardedLookup } });
 
-    // NOTE: undici's `request` does not follow redirects by default (redirect
-    // following is an opt-in interceptor). We deliberately do NOT enable it —
-    // every 3xx is surfaced to our manual, per-hop-revalidated loop below.
-    const res = await undiciRequest(url, {
-      method: "GET",
-      dispatcher: agent,
-      headersTimeout: timeoutMs,
-      bodyTimeout: timeoutMs,
-      headers: { "user-agent": "dionysus-mcp/0.1 (+verified-read-only)" },
-    });
+    // A fresh guarded Agent is created per hop; it MUST be released on every
+    // exit path (return, continue, throw) or its sockets/timers leak on the hot
+    // scrape/brand path. The finally closes it. On the 2xx return path the body
+    // is fully drained into `chunks` BEFORE this block returns, so agent.close()
+    // can never truncate the response we hand back.
+    try {
+      // NOTE: undici's `request` does not follow redirects by default (redirect
+      // following is an opt-in interceptor). We deliberately do NOT enable it —
+      // every 3xx is surfaced to our manual, per-hop-revalidated loop below.
+      const res = await undiciRequest(url, {
+        method: "GET",
+        dispatcher: agent,
+        headersTimeout: timeoutMs,
+        bodyTimeout: timeoutMs,
+        headers: { "user-agent": "dionysus-mcp/0.1 (+verified-read-only)" },
+      });
 
-    if (res.statusCode >= 300 && res.statusCode < 400) {
-      const loc = res.headers["location"];
-      await res.body.dump();
-      if (!loc || typeof loc !== "string") throw new SsrfError("Redirect without location");
-      if (hop === maxRedirects) throw new SsrfError(`Too many redirects (> ${maxRedirects})`);
-      url = new URL(loc, url); // relative or absolute — re-validated on next loop
-      continue;
-    }
-
-    const contentType = String(res.headers["content-type"] ?? "");
-    const chunks: Buffer[] = [];
-    let total = 0;
-    for await (const chunk of res.body) {
-      total += (chunk as Buffer).length;
-      if (total > maxBytes) {
-        res.body.destroy();
-        throw new SsrfError(`Response size exceeds cap (${maxBytes} bytes)`);
+      if (res.statusCode >= 300 && res.statusCode < 400) {
+        const loc = res.headers["location"];
+        await res.body.dump();
+        if (!loc || typeof loc !== "string") throw new SsrfError("Redirect without location");
+        if (hop === maxRedirects) throw new SsrfError(`Too many redirects (> ${maxRedirects})`);
+        url = new URL(loc, url); // relative or absolute — re-validated on next loop
+        continue;
       }
-      chunks.push(chunk as Buffer);
+
+      const contentType = String(res.headers["content-type"] ?? "");
+      const chunks: Buffer[] = [];
+      let total = 0;
+      for await (const chunk of res.body) {
+        total += (chunk as Buffer).length;
+        if (total > maxBytes) {
+          res.body.destroy();
+          throw new SsrfError(`Response size exceeds cap (${maxBytes} bytes)`);
+        }
+        chunks.push(chunk as Buffer);
+      }
+      // Body is fully buffered above; safe to close the agent in `finally` now.
+      return {
+        status: res.statusCode,
+        contentType,
+        body: Buffer.concat(chunks).toString("utf8"),
+        finalUrl: url.toString(),
+      };
+    } finally {
+      await agent.close();
     }
-    return {
-      status: res.statusCode,
-      contentType,
-      body: Buffer.concat(chunks).toString("utf8"),
-      finalUrl: url.toString(),
-    };
   }
   throw new SsrfError("Unreachable");
 }
