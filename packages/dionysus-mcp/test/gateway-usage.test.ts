@@ -14,6 +14,13 @@ describe("usageFromJson", () => {
       inputTokens: 0, outputTokens: 0, usageMissing: true,
     });
   });
+
+  it("degrades negative or fractional token counts to usage-missing", () => {
+    expect(usageFromJson({ usage: { prompt_tokens: -5, completion_tokens: 3 } }))
+      .toEqual({ inputTokens: 0, outputTokens: 0, usageMissing: true });
+    expect(usageFromJson({ usage: { prompt_tokens: 1.5, completion_tokens: 3 } }))
+      .toEqual({ inputTokens: 0, outputTokens: 0, usageMissing: true });
+  });
 });
 
 describe("createSseUsageScanner", () => {

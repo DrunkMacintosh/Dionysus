@@ -37,16 +37,18 @@ export async function gateBudget(
       },
     };
   }
-  if (budget.allowed) return { ok: true };
+  // Strict + null-safe: only an on-contract `allowed === true` passes; any
+  // off-contract truthy value or null result falls through to the 429 block.
+  if (budget && budget.allowed === true) return { ok: true };
   return {
     ok: false,
     status: 429,
     body: {
       error: {
         type: "budget_exhausted",
-        message: budget.reason ?? "Daily token budget exhausted.",
-        tokensUsedToday: budget.tokensUsedToday,
-        maxTokensPerDay: budget.maxTokensPerDay,
+        message: budget?.reason ?? "Daily token budget exhausted.",
+        tokensUsedToday: budget?.tokensUsedToday,
+        maxTokensPerDay: budget?.maxTokensPerDay,
       },
     },
   };

@@ -4,15 +4,29 @@ export type GatewayUsage = {
   usageMissing: boolean;
 };
 
-const MISSING: GatewayUsage = { inputTokens: 0, outputTokens: 0, usageMissing: true };
+// Frozen: this singleton is returned by reference, so freezing turns any
+// downstream mutation into a thrown error (ESM is strict mode) instead of
+// silent cross-request ledger corruption.
+const MISSING: GatewayUsage = Object.freeze({
+  inputTokens: 0,
+  outputTokens: 0,
+  usageMissing: true,
+});
 
 function fromUsageObject(usage: unknown): GatewayUsage | null {
   if (typeof usage !== "object" || usage === null) return null;
   const u = usage as Record<string, unknown>;
   const input = u["prompt_tokens"];
   const output = u["completion_tokens"];
-  if (typeof input !== "number" || typeof output !== "number") return null;
-  return { inputTokens: input, outputTokens: output, usageMissing: false };
+  // Only non-negative integers are real token counts; negatives/floats degrade
+  // to usageMissing rather than poisoning the ledger with fabricated numbers.
+  const isValid =
+    Number.isInteger(input) &&
+    (input as number) >= 0 &&
+    Number.isInteger(output) &&
+    (output as number) >= 0;
+  if (!isValid) return null;
+  return { inputTokens: input as number, outputTokens: output as number, usageMissing: false };
 }
 
 export function usageFromJson(body: unknown): GatewayUsage {
