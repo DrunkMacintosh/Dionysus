@@ -43,15 +43,20 @@ export async function assertContentBound(identity: Identity, routeActionId: stri
  * but between that check and this write another call could have advanced the row. Scoping
  * the updateMany by the source status (and businessId) means a concurrent transition writes
  * first and this one matches zero rows — the loser throws instead of double-writing.
+ *
+ * `extraWhere` pins additional row values a caller validated before the write (only
+ * `approveAction` needs it — see there). Any concurrent change to a pinned column makes this
+ * updateMany match zero rows, so the stale write loses instead of clobbering fresh state.
  */
 async function transitionOrThrow(
   actionId: string,
   businessId: string,
   fromStatus: Prisma.RouteActionWhereInput["status"],
   data: Prisma.RouteActionUpdateManyMutationInput,
+  extraWhere?: Prisma.RouteActionWhereInput,
 ): Promise<void> {
   const { count } = await prisma.routeAction.updateMany({
-    where: { id: actionId, businessId, status: fromStatus },
+    where: { id: actionId, businessId, status: fromStatus, ...extraWhere },
     data,
   });
   if (count === 0) {
@@ -64,8 +69,16 @@ export async function approveAction(identity: Identity, input: ApproveInput): Pr
   const action = await loadScopedAction(identity, input.routeActionId);
   assertTransition(action, ["proposed"], "approved");
   await assertBound(identity, action);
+  // Pin the exact (assetId, contentHash) assertBound just validated into the approval write.
+  // A still-"proposed" row can be legally rebound by a concurrent setActionAsset in the window
+  // between the assertBound read above and this write; without the pin the updateMany would
+  // still match on status alone and flip status->approved onto content the human never reviewed
+  // (rebind-vs-approve TOCTOU). Only approve needs this: once approved, setActionAsset's own
+  // bind-guard refuses any rebind, so the approved (assetId, contentHash) can no longer move
+  // and the other transitions' status-only guard stays safe.
   await transitionOrThrow(action.id, identity.businessId, "proposed",
-    { status: "approved", approvedAt: new Date(), approvedBy: input.principal });
+    { status: "approved", approvedAt: new Date(), approvedBy: input.principal },
+    { assetId: action.assetId, contentHash: action.contentHash });
 }
 
 export async function rejectAction(identity: Identity, input: RejectInput): Promise<void> {
@@ -79,6 +92,9 @@ export async function startExecution(identity: Identity, input: StartExecutionIn
   const action = await loadScopedAction(identity, input.routeActionId);
   assertTransition(action, ["approved"], "executing");
   await assertBound(identity, action); // the send path refuses content whose hash differs from the approved one
+  // No (assetId, contentHash) pin needed here (unlike approveAction): an approved row is immutable
+  // to setActionAsset — its bind-guard refuses rebind — so the approved binding cannot move under
+  // the status-only guard between the assertBound read above and this write.
   await transitionOrThrow(action.id, identity.businessId, "approved",
     { status: "executing", runId: input.runId });
 }

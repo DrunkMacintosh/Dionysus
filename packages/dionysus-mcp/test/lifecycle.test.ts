@@ -185,4 +185,26 @@ describe("D29 lifecycle transitions (server-validated)", () => {
     const a = await prisma.routeAction.findUnique({ where: { id: actionId } });
     expect(a!.assetId).not.toBe(evil.assetId); // original binding intact
   });
+
+  it("approval loses if the binding moved after its content check (rebind-vs-approve race)", async () => {
+    const { actionId } = await boundAction(BIZ, "reviewed copy");
+    // Simulate the interleave: capture what approveAction WOULD have validated,
+    // then move the binding (legal: action still proposed) before the approval write lands.
+    // We reproduce the exact lost-update by rebinding, then attempting an approval whose
+    // guard must now mismatch the row's (assetId, contentHash).
+    const before = await prisma.routeAction.findUnique({ where: { id: actionId } });
+    const evil = await persistAsset({ businessId: BIZ }, { channel: "x", kind: "post", content: { body: "unreviewed replacement" }, routeActionId: actionId });
+    await setActionAsset({ businessId: BIZ }, actionId, evil.assetId); // rebind while proposed — legal
+    // The approval that validated the OLD binding must not land. Direct guard probe:
+    const { count } = await prisma.routeAction.updateMany({
+      where: { id: actionId, businessId: BIZ, status: "proposed", assetId: before!.assetId, contentHash: before!.contentHash },
+      data: { status: "approved", approvedAt: new Date(), approvedBy: "stale" },
+    });
+    expect(count).toBe(0); // stale approval loses
+    // And a FRESH approveAction (validating the CURRENT binding) succeeds:
+    await approveAction({ businessId: BIZ }, { routeActionId: actionId, principal: "fresh" });
+    const a = await prisma.routeAction.findUnique({ where: { id: actionId } });
+    expect(a!.status).toBe("approved");
+    expect(a!.assetId).toBe(evil.assetId); // approved exactly what is currently bound
+  });
 });
