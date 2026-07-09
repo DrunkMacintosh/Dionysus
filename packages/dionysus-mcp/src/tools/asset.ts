@@ -21,6 +21,12 @@ export async function setActionAsset(identity: Identity, routeActionId: string, 
   if (!action) throw new Error(`RouteAction ${routeActionId} not found in this business scope.`);
   const asset = await prisma.asset.findFirst({ where: { id: assetId, businessId: identity.businessId } });
   if (!asset) throw new Error(`Asset ${assetId} not found in this business scope.`);
-  await prisma.routeAction.update({ where: { id: routeActionId },
-    data: { assetId, contentHash: hashContent(asset.contentJson) } });
+  // Binding only in the drafting phase — an approved action's hash must never move (D29).
+  const { count } = await prisma.routeAction.updateMany({
+    where: { id: routeActionId, businessId: identity.businessId, status: "proposed" },
+    data: { assetId, contentHash: hashContent(asset.contentJson) },
+  });
+  if (count === 0) {
+    throw new Error(`Cannot bind asset: RouteAction ${routeActionId} is not in "proposed" status (binding is a drafting-phase act).`);
+  }
 }

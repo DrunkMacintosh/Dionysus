@@ -175,4 +175,14 @@ describe("D29 lifecycle transitions (server-validated)", () => {
     expect(a!.status).toBe("approved");
     expect(["a", "b"]).toContain(a!.approvedBy); // exactly one principal's approval, not a blend
   });
+
+  it("re-binding an asset onto an approved action is refused (approved hash never moves)", async () => {
+    const { actionId } = await boundAction(BIZ, "sealed copy");
+    await approveAction({ businessId: BIZ }, { routeActionId: actionId, principal: "p" });
+    const evil = await persistAsset({ businessId: BIZ }, { channel: "x", kind: "post", content: { body: "evil replacement" }, routeActionId: actionId });
+    await expect(setActionAsset({ businessId: BIZ }, actionId, evil.assetId))
+      .rejects.toThrow(/not in "proposed" status/i);
+    const a = await prisma.routeAction.findUnique({ where: { id: actionId } });
+    expect(a!.assetId).not.toBe(evil.assetId); // original binding intact
+  });
 });
