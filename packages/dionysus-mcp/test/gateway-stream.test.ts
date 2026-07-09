@@ -8,6 +8,7 @@ const IDENTITY = { businessId: "biz_stream" };
 let upstream: http.Server;
 let gateway: http.Server;
 let gwUrl: string;
+let lastUpstreamBody = "";
 
 const SSE_CHUNKS = [
   'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n',
@@ -24,10 +25,15 @@ beforeAll(async () => {
     update: { maxTokensPerDay: 100000 },
   });
 
-  upstream = http.createServer((_req, res) => {
-    res.writeHead(200, { "content-type": "text/event-stream" });
-    for (const c of SSE_CHUNKS) res.write(c);
-    res.end();
+  upstream = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", () => {
+      lastUpstreamBody = Buffer.concat(chunks).toString("utf8");
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      for (const c of SSE_CHUNKS) res.write(c);
+      res.end();
+    });
   });
   await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", r));
   const upPort = (upstream.address() as { port: number }).port;
@@ -61,5 +67,12 @@ describe("gateway streaming", () => {
     expect(rows[0]!.inputTokens).toBe(11);
     expect(rows[0]!.outputTokens).toBe(4);
     expect(rows[0]!.note).toBe("gateway");
+  });
+
+  it("injects stream_options.include_usage so the cap never depends on client cooperation", async () => {
+    const sent = JSON.parse(lastUpstreamBody) as Record<string, unknown>;
+    expect((sent["stream_options"] as Record<string, unknown>)["include_usage"]).toBe(true);
+    expect(sent["stream"]).toBe(true);
+    expect(sent["model"]).toBe("claude-haiku-4-5");
   });
 });

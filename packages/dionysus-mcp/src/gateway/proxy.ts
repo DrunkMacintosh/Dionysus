@@ -125,13 +125,29 @@ export function createGatewayHandler(
       return sendJson(res, gate.status, gate.body);
     }
 
+    // Streaming cap integrity: OpenAI-compatible upstreams only emit a usage
+    // chunk when the request sets stream_options.include_usage. A client sending
+    // plain {stream:true} would otherwise yield a usage-less stream → 0 tokens
+    // recorded → the daily cap never advances. Force the option on so accounting
+    // never depends on client cooperation; preserve any keys the client set.
+    // Non-streaming requests forward the untouched raw body (byte-identical).
+    let forwardBody = raw;
+    if (isStream) {
+      const existing =
+        typeof parsed["stream_options"] === "object" && parsed["stream_options"] !== null
+          ? (parsed["stream_options"] as Record<string, unknown>)
+          : {};
+      parsed["stream_options"] = { ...existing, include_usage: true };
+      forwardBody = JSON.stringify(parsed);
+    }
+
     const upstreamRes = await request(`${cfg.upstreamUrl.replace(/\/+$/, "")}${COMPLETIONS_PATH}`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         ...(cfg.upstreamKey ? { authorization: `Bearer ${cfg.upstreamKey}` } : {}),
       },
-      body: raw,
+      body: forwardBody,
     });
 
     if (isStream) {

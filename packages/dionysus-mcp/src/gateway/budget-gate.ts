@@ -24,15 +24,21 @@ export async function gateBudget(
   try {
     budget = await checkFn(identity);
   } catch (e) {
+    // Log the real detail server-side; never echo DB internals to the client.
+    console.error(
+      JSON.stringify({
+        evt: "gateway:budget_check_error",
+        businessId: identity.businessId,
+        err: String(e),
+      }),
+    );
     return {
       ok: false,
       status: 503,
       body: {
         error: {
           type: "budget_check_failed",
-          message: `Budget check errored — failing closed (spec §14): ${
-            e instanceof Error ? e.message : String(e)
-          }`,
+          message: "Budget check failed — failing closed (spec §14).",
         },
       },
     };

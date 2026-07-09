@@ -43,11 +43,25 @@ describe("gateBudget", () => {
     const boom = async () => {
       throw new Error("db down");
     };
-    const r = await gateBudget({ businessId: "biz_gate" }, boom as never);
+    const errs: string[] = [];
+    const orig = console.error;
+    console.error = (msg: string) => {
+      errs.push(String(msg));
+    };
+    let r: Awaited<ReturnType<typeof gateBudget>>;
+    try {
+      r = await gateBudget({ businessId: "biz_gate" }, boom as never);
+    } finally {
+      console.error = orig;
+    }
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.status).toBe(503);
       expect(r.body.error.type).toBe("budget_check_failed");
+      // Generic client message — no raw DB internals leaked.
+      expect(r.body.error.message).not.toContain("db down");
     }
+    // The structured detail is logged server-side instead.
+    expect(errs.some((l) => l.includes("gateway:budget_check_error") && l.includes("biz_gate"))).toBe(true);
   });
 });
