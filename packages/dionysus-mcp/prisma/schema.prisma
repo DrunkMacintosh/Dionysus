@@ -17,6 +17,10 @@ model Business {
   llmCalls        LlmCall[]
   creditEntries   CreditLedger[]
   cases           Case[]
+  objectives      Objective[]
+  routes          Route[]
+  waypoints       RouteWaypoint[]
+  routeActions    RouteAction[]
 }
 
 model Product {
@@ -85,6 +89,70 @@ model Case {
   sourcesJson        String
   confidence         Float
   createdAt          DateTime @default(now())
+
+  @@index([businessId])
+}
+
+model Objective {
+  id         String   @id @default(cuid())
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id])
+  kind       String
+  target     String
+  metric     String
+  dueDate    DateTime?
+  status     String
+  createdAt  DateTime @default(now())
+  routes     Route[]
+
+  @@index([businessId])
+}
+
+model Route {
+  id          String   @id @default(cuid())
+  businessId  String
+  business    Business @relation(fields: [businessId], references: [id])
+  objectiveId String
+  objective   Objective @relation(fields: [objectiveId], references: [id])
+  source      String   // "case" | "composed"
+  caseRef     String?
+  status      String   // "proposed" | "active" | "done"
+  createdAt   DateTime @default(now())
+  waypoints   RouteWaypoint[]
+
+  @@index([businessId])
+}
+
+model RouteWaypoint {
+  id         String   @id @default(cuid())
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id])
+  routeId    String
+  route      Route    @relation(fields: [routeId], references: [id])
+  order      Int
+  title      String
+  goal       String
+  status     String   // "locked" | "active" | "done"
+  createdAt  DateTime @default(now())
+  actions    RouteAction[]
+
+  @@index([businessId])
+}
+
+model RouteAction {
+  id           String   @id @default(cuid())
+  businessId   String
+  business     Business @relation(fields: [businessId], references: [id])
+  waypointId   String
+  waypoint     RouteWaypoint @relation(fields: [waypointId], references: [id])
+  employeeRole String
+  type         String
+  status       String   // "proposed" | "approved" | "executing" | "executed" | "rejected"
+  contentHash  String   @default("")
+  rationale    String?
+  featuresJson String   @default("{}")
+  metricsJson  String?
+  createdAt    DateTime @default(now())
 
   @@index([businessId])
 }
