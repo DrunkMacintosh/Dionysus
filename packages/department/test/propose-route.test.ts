@@ -69,4 +69,18 @@ describe("proposeRoute", () => {
       { objective: { kind: "k", target: "1", metric: "m" }, caseId },
       { harness: fakeHarness(), models: { brain: "fake" } })).rejects.toThrow(/case .* not found|scope/i);
   });
+
+  it("leaves no orphan objective when the model output fails to parse", async () => {
+    await prisma.business.upsert({ where: { id: "biz_route_orphan" },
+      create: { id: "biz_route_orphan", name: "Orphan Co", maxTokensPerDay: 100000 }, update: { maxTokensPerDay: 100000 } });
+    await prisma.objective.deleteMany({ where: { businessId: "biz_route_orphan" } });
+    // Need a case owned by biz_route_orphan (proposeRoute guards case scope before objective):
+    const oc = await persistCase({ businessId: "biz_route_orphan" }, { name: "C", platform: "hn", mode: "m", rank: 1, historicalArc: [], modernizedPlan: {}, insight: "i", sources: [], confidence: 0.5 });
+    const badHarness: Harness = { async runAgent() { return { finalOutput: "not json at all" }; }, async completeOnce() { return "x"; } };
+    await expect(proposeRoute({ businessId: "biz_route_orphan" },
+      { objective: { kind: "k", target: "1", metric: "m" }, caseId: oc.caseId },
+      { harness: badHarness, models: { brain: "b" } })).rejects.toThrow();
+    const objs = await prisma.objective.findMany({ where: { businessId: "biz_route_orphan" } });
+    expect(objs).toHaveLength(0); // no orphan
+  });
 });

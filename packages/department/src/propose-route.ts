@@ -4,10 +4,11 @@
 //
 //   checkBudget (fail-closed FIRST, D34/Spec §14)
 //     → load Case by caseId, tenant-scoped (throw if not found / cross-tenant)
-//     → createObjective (objective-first, D31/D8/D12 — AFTER the guards so a bad
-//                        case never orphans an objective)
 //     → route-strategist runAgent (objective + fenced case material)   [T1 harness]
 //     → parseRouteProposal (retry via the harness)                     [T4 schema]
+//     → createObjective (objective-first, D31/D8/D12 — AFTER budget+case guards
+//                        AND after the model output parses, so a bad case or an
+//                        unparseable model reply never orphans an objective)
 //     → persistRoute(source:"case", caseRef:caseId)                    [grounded]
 //     → per waypoint (order = index+1) persistWaypoint → per action upsertRouteAction
 //     → assembled RoutePlan
@@ -46,8 +47,6 @@ export async function proposeRoute(identity: Identity, input: ProposeRouteInput,
   const kase = await prisma.case.findFirst({ where: { id: input.caseId, businessId: identity.businessId } });
   if (!kase) throw new Error(`Case ${input.caseId} not found in this business scope.`);
 
-  const { objectiveId } = await createObjective(identity, input.objective);
-
   const caseMaterial = fence("case", JSON.stringify({
     name: kase.name, platform: kase.platform, mode: kase.mode,
     historicalArc: JSON.parse(kase.historicalArcJson),
@@ -61,6 +60,12 @@ export async function proposeRoute(identity: Identity, input: ProposeRouteInput,
   const proposal = await parseRouteProposal(raw.finalOutput,
     async (err) => (await deps.harness.runAgent(def, err)).finalOutput);
 
+  // Objective-first, but only once the model output has parsed: creating it here
+  // (instead of before the model call) means a parse/model failure never persists
+  // a routeless orphan objective. objectiveId is used only below, so this is a
+  // zero-functional-cost move — the strategist prompt above uses input.objective
+  // fields directly, never objectiveId. (D31/D8/D12)
+  const { objectiveId } = await createObjective(identity, input.objective);
   const { routeId } = await persistRoute(identity, { objectiveId, source: "case", caseRef: input.caseId });
 
   const waypoints: RoutePlan["waypoints"] = [];
