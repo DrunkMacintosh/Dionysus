@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { prisma } from "../src/db.js";
 import { hashContent } from "../src/lib/content-hash.js";
 import { persistAsset, setActionAsset } from "../src/tools/asset.js";
+import { approveAction, rejectAction, startExecution, completeExecution, assertContentBound } from "../src/tools/lifecycle.js";
 
 const BIZ = "biz_lifecycle";
 
@@ -71,5 +72,92 @@ describe("content hash binding (D29)", () => {
     const after = await prisma.routeAction.findUnique({ where: { id: action.id } });
     const tampered = await prisma.asset.findUnique({ where: { id: assetId } });
     expect(after!.contentHash).not.toBe(hashContent(tampered!.contentJson));
+  });
+});
+
+async function boundAction(businessId: string, body: string) {
+  const { action } = await makeChain(businessId);
+  const { assetId } = await persistAsset({ businessId },
+    { channel: "x", kind: "post", content: { body }, routeActionId: action.id });
+  await setActionAsset({ businessId }, action.id, assetId);
+  return { actionId: action.id, assetId };
+}
+
+describe("D29 lifecycle transitions (server-validated)", () => {
+  it("happy path: proposed -> approved -> executing -> executed, fields set at each step", async () => {
+    const { actionId } = await boundAction(BIZ, "ship it");
+    await approveAction({ businessId: BIZ }, { routeActionId: actionId, principal: "founder@example.com" });
+    let a = await prisma.routeAction.findUnique({ where: { id: actionId } });
+    expect(a!.status).toBe("approved");
+    expect(a!.approvedAt).toBeInstanceOf(Date);
+    expect(a!.approvedBy).toBe("founder@example.com");
+    await startExecution({ businessId: BIZ }, { routeActionId: actionId, runId: "run_1" });
+    a = await prisma.routeAction.findUnique({ where: { id: actionId } });
+    expect(a!.status).toBe("executing");
+    expect(a!.runId).toBe("run_1");
+    await completeExecution({ businessId: BIZ }, { routeActionId: actionId });
+    a = await prisma.routeAction.findUnique({ where: { id: actionId } });
+    expect(a!.status).toBe("executed");
+  });
+
+  it("refuses to approve an action with no bound asset", async () => {
+    const { action } = await makeChain(BIZ);
+    await expect(approveAction({ businessId: BIZ }, { routeActionId: action.id, principal: "p" }))
+      .rejects.toThrow(/no bound asset/i);
+  });
+
+  it("refuses to approve when the asset was edited after binding (hash mismatch)", async () => {
+    const { actionId, assetId } = await boundAction(BIZ, "original");
+    await prisma.asset.update({ where: { id: assetId }, data: { contentJson: JSON.stringify({ body: "tampered" }) } });
+    await expect(approveAction({ businessId: BIZ }, { routeActionId: actionId, principal: "p" }))
+      .rejects.toThrow(/hash mismatch/i);
+  });
+
+  it("send path refuses tampered content AFTER approval (the D29 core)", async () => {
+    const { actionId, assetId } = await boundAction(BIZ, "approved copy");
+    await approveAction({ businessId: BIZ }, { routeActionId: actionId, principal: "p" });
+    await prisma.asset.update({ where: { id: assetId }, data: { contentJson: JSON.stringify({ body: "swapped after approval" }) } });
+    await expect(startExecution({ businessId: BIZ }, { routeActionId: actionId, runId: "run_x" }))
+      .rejects.toThrow(/hash mismatch/i);
+    const a = await prisma.routeAction.findUnique({ where: { id: actionId } });
+    expect(a!.status).toBe("approved"); // refusal does not corrupt state
+    expect(a!.runId).toBeNull();
+  });
+
+  it("rejects invalid transitions with explicit errors", async () => {
+    const { actionId } = await boundAction(BIZ, "x");
+    await expect(startExecution({ businessId: BIZ }, { routeActionId: actionId, runId: "r" }))
+      .rejects.toThrow(/invalid transition/i);           // proposed -> executing skips approval
+    await expect(completeExecution({ businessId: BIZ }, { routeActionId: actionId }))
+      .rejects.toThrow(/invalid transition/i);           // proposed -> executed
+    await approveAction({ businessId: BIZ }, { routeActionId: actionId, principal: "p" });
+    await expect(approveAction({ businessId: BIZ }, { routeActionId: actionId, principal: "p" }))
+      .rejects.toThrow(/invalid transition/i);           // approve twice
+  });
+
+  it("rejectAction works from proposed AND executing, bumps rejectionCount, and is final", async () => {
+    const { actionId } = await boundAction(BIZ, "r1");
+    await rejectAction({ businessId: BIZ }, { routeActionId: actionId });
+    let a = await prisma.routeAction.findUnique({ where: { id: actionId } });
+    expect(a!.status).toBe("rejected");
+    expect(a!.rejectionCount).toBe(1);
+    await expect(rejectAction({ businessId: BIZ }, { routeActionId: actionId }))
+      .rejects.toThrow(/invalid transition/i);           // rejected is terminal
+
+    const second = await boundAction(BIZ, "r2");
+    await approveAction({ businessId: BIZ }, { routeActionId: second.actionId, principal: "p" });
+    await startExecution({ businessId: BIZ }, { routeActionId: second.actionId, runId: "r" });
+    await rejectAction({ businessId: BIZ }, { routeActionId: second.actionId }); // executing -> rejected allowed
+    a = await prisma.routeAction.findUnique({ where: { id: second.actionId } });
+    expect(a!.status).toBe("rejected");
+  });
+
+  it("cross-tenant: another business cannot approve or probe the action (fail-closed)", async () => {
+    const { actionId } = await boundAction(BIZ, "mine");
+    await prisma.business.upsert({ where: { id: "biz_lc_other" }, create: { id: "biz_lc_other", name: "O" }, update: {} });
+    await expect(approveAction({ businessId: "biz_lc_other" }, { routeActionId: actionId, principal: "evil" }))
+      .rejects.toThrow(/not found|scope/i);
+    await expect(assertContentBound({ businessId: "biz_lc_other" }, actionId))
+      .rejects.toThrow(/not found|scope/i);
   });
 });
