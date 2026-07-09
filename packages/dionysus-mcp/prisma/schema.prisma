@@ -21,6 +21,7 @@ model Business {
   routes          Route[]
   waypoints       RouteWaypoint[]
   routeActions    RouteAction[]
+  assets          Asset[]
 }
 
 model Product {
@@ -152,7 +153,23 @@ model RouteAction {
   rationale    String?
   featuresJson String   @default("{}")
   metricsJson  String?
+  assetId      String?
+  assets       Asset[]
   createdAt    DateTime @default(now())
+
+  @@index([businessId])
+}
+
+model Asset {
+  id            String   @id @default(cuid())
+  businessId    String
+  business      Business @relation(fields: [businessId], references: [id])
+  routeActionId String?
+  routeAction   RouteAction? @relation(fields: [routeActionId], references: [id])
+  channel       String
+  kind          String
+  contentJson   String
+  createdAt     DateTime @default(now())
 
   @@index([businessId])
 }
