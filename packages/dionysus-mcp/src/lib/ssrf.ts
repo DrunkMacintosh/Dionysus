@@ -139,3 +139,140 @@ export async function assertPublicHost(
     }
   }
 }
+
+import { Agent, request as undiciRequest } from "undici";
+import type { LookupAddress, LookupOptions } from "node:dns";
+
+export type SafeFetchOptions = {
+  maxBytes?: number;
+  timeoutMs?: number;
+  maxRedirects?: number;
+  lookupFn?: LookupFn;
+  /** TEST-ONLY seams. Never set in production code paths. */
+  __testAllowPrivate?: boolean;
+  __testAllowHosts?: string[];
+};
+
+export type SafeFetchResult = {
+  status: number;
+  contentType: string;
+  body: string;
+  finalUrl: string;
+};
+
+const ALLOWED_PORTS = new Set(["", "80", "443"]);
+
+async function assertHostAllowed(hostname: string, opts: SafeFetchOptions): Promise<void> {
+  if (opts.__testAllowPrivate) return;
+  if (opts.__testAllowHosts?.includes(hostname)) return;
+  await assertPublicHost(hostname, opts.lookupFn);
+}
+
+// Matches node's `net.LookupFunction` shape (what undici forwards to net.connect).
+// node calls this with `{ all: true }`, so the callback must receive an ARRAY of
+// { address, family } in that mode; otherwise a single (address, family) pair.
+type ConnectLookup = (
+  hostname: string,
+  options: LookupOptions,
+  callback: (
+    err: NodeJS.ErrnoException | null,
+    address: string | LookupAddress[],
+    family?: number,
+  ) => void,
+) => void;
+
+export async function safeFetch(
+  rawUrl: string,
+  opts: SafeFetchOptions = {},
+): Promise<SafeFetchResult> {
+  const maxBytes = opts.maxBytes ?? 2_000_000;
+  const timeoutMs = opts.timeoutMs ?? 10_000;
+  const maxRedirects = opts.maxRedirects ?? 3;
+
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new SsrfError(`Invalid URL: ${rawUrl}`);
+  }
+
+  for (let hop = 0; hop <= maxRedirects; hop++) {
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new SsrfError(`Blocked scheme: ${url.protocol}`);
+    }
+    if (!ALLOWED_PORTS.has(url.port) && !opts.__testAllowPrivate && !opts.__testAllowHosts) {
+      // test seams use an ephemeral local port; production allows only 80/443
+      throw new SsrfError(`Blocked port: ${url.port}`);
+    }
+    await assertHostAllowed(url.hostname, opts);
+
+    // Guarded agent: re-validate at socket connect time (DNS-rebinding defense).
+    // The connect guard honors the same TEST-ONLY seams as assertHostAllowed so
+    // that allowlisted hosts (which may legitimately resolve to loopback in tests)
+    // can be reached, while every real resolved address is still IP-checked. This
+    // keeps per-hop redirect re-validation genuinely exercised (a redirect target
+    // that is NOT allowlisted still gets blocked at assertHostAllowed above).
+    const lookupFn = opts.lookupFn;
+    const guardedLookup: ConnectLookup = (hostname, options, cb) => {
+      const hostSeamAllowed =
+        opts.__testAllowPrivate === true ||
+        (opts.__testAllowHosts?.includes(hostname) ?? false);
+      const doLookup = lookupFn
+        ? lookupFn(hostname)
+        : import("node:dns/promises").then((d) => d.lookup(hostname, { all: true, verbatim: true }));
+      doLookup
+        .then((addrs) => {
+          const list = Array.isArray(addrs) ? addrs : [addrs];
+          const bad = list.find((a) => !hostSeamAllowed && isPrivateIp(a.address));
+          if (bad) return cb(new SsrfError(`Blocked at connect: ${bad.address}`), "", 0);
+          if (options?.all) {
+            cb(null, list.map((a) => ({ address: a.address, family: a.family })));
+          } else {
+            const first = list[0]!;
+            cb(null, first.address, first.family);
+          }
+        })
+        .catch((e) => cb(e as NodeJS.ErrnoException, "", 0));
+    };
+    const agent = new Agent({ connect: { lookup: guardedLookup } });
+
+    // NOTE: undici's `request` does not follow redirects by default (redirect
+    // following is an opt-in interceptor). We deliberately do NOT enable it —
+    // every 3xx is surfaced to our manual, per-hop-revalidated loop below.
+    const res = await undiciRequest(url, {
+      method: "GET",
+      dispatcher: agent,
+      headersTimeout: timeoutMs,
+      bodyTimeout: timeoutMs,
+      headers: { "user-agent": "dionysus-mcp/0.1 (+verified-read-only)" },
+    });
+
+    if (res.statusCode >= 300 && res.statusCode < 400) {
+      const loc = res.headers["location"];
+      await res.body.dump();
+      if (!loc || typeof loc !== "string") throw new SsrfError("Redirect without location");
+      if (hop === maxRedirects) throw new SsrfError(`Too many redirects (> ${maxRedirects})`);
+      url = new URL(loc, url); // relative or absolute — re-validated on next loop
+      continue;
+    }
+
+    const contentType = String(res.headers["content-type"] ?? "");
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for await (const chunk of res.body) {
+      total += (chunk as Buffer).length;
+      if (total > maxBytes) {
+        res.body.destroy();
+        throw new SsrfError(`Response size exceeds cap (${maxBytes} bytes)`);
+      }
+      chunks.push(chunk as Buffer);
+    }
+    return {
+      status: res.statusCode,
+      contentType,
+      body: Buffer.concat(chunks).toString("utf8"),
+      finalUrl: url.toString(),
+    };
+  }
+  throw new SsrfError("Unreachable");
+}
