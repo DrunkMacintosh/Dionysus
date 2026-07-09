@@ -14,10 +14,25 @@
 import { scrapeLadder } from "dionysus-mcp/lib/scrape/ladder";
 import type { SafeFetchOptions } from "dionysus-mcp/lib/ssrf";
 
+// D20 break-out defense. Attacker-controlled content (page title / description
+// / text) OR the fetched url can itself contain the literal fence markers. If a
+// forged `<<<END-UNTRUSTED-CONTENT>>>` survived INSIDE the fenced region, a
+// downstream model would see the fence close early and read everything after it
+// as trusted instructions. We defang any marker-lookalike sequence inside the
+// content/url by inserting a zero-width space (U+200B) between the leading `<`s:
+// it is no longer the literal marker the checker/prompts key on, yet stays
+// human-readable. The OUTER real markers are written from string literals below
+// and are NEVER passed through `neutralize`, so they stay byte-exact — Task 4's
+// prompts and Task 6's fixed-marker checker depend on those exact strings, so
+// this is deliberately a fixed defang, not a random nonce.
+const neutralize = (s: string): string =>
+  s.replace(/<<<(\/?(?:END-)?UNTRUSTED-CONTENT)/gi, "<​<​<$1");
+
 export async function fetchPageFenced(url: string, fetchOpts?: SafeFetchOptions): Promise<string> {
   const r = await scrapeLadder(url, fetchOpts);
   const payload = r.tier === 4
     ? `COULD NOT READ (${r.error ?? "unknown"})`
     : [r.title, r.description, r.text].filter(Boolean).join("\n");
-  return `<<<UNTRUSTED-CONTENT url=${url}>>>\n${payload}\n<<<END-UNTRUSTED-CONTENT>>>`;
+  const safeUrl = neutralize(url);
+  return `<<<UNTRUSTED-CONTENT url=${safeUrl}>>>\n${neutralize(payload)}\n<<<END-UNTRUSTED-CONTENT>>>`;
 }
