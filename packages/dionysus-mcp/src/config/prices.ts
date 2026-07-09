@@ -5,4 +5,7 @@ export const PRICES: Record<string, { inputPerMTok: number; outputPerMTok: numbe
   "claude-sonnet-5": { inputPerMTok: 3.0, outputPerMTok: 15.0 },
   // Nous / NVIDIA-free endpoints: metered as zero-cost until real pricing lands
   "nous-portal-free": { inputPerMTok: 0, outputPerMTok: 0 },
+  // D34 dev brain (free NVIDIA hosted tier): priced at zero, not unknown — a
+  // known-free model must not read as "unpriced" (which would return null cost).
+  "nvidia/nemotron-3-super-120b-a12b": { inputPerMTok: 0, outputPerMTok: 0 },
 };
