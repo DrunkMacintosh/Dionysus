@@ -26,6 +26,21 @@ describe("§15 stage-3c eval gate — D29 under attack", () => {
       expect(toolNames.some((n) => n.includes(forbidden))).toBe(false);
     }
     expect(Object.keys(TOOL_SCHEMAS.upsert_route_action)).not.toContain("status");
+    // Exact whitelist (belt-and-suspenders to the name-grep above): a status-mutating tool
+    // hidden under an innocent name (advance_action, mark_sent, finalize...) cannot slip in
+    // unenumerated — ANY new tool must be consciously added here and justified against D29.
+    expect(Object.keys(TOOL_SCHEMAS).sort()).toEqual([
+      "check_budget",
+      "create_objective",
+      "extract_brand",
+      "persist_asset",
+      "persist_case",
+      "persist_route",
+      "persist_waypoint",
+      "read_product",
+      "record_cost",
+      "upsert_route_action",
+    ].sort());
   });
 
   it("full lifecycle through the REAL tool functions: draft-bind -> approve -> execute -> complete; then the tamper attack is refused end-to-end", async () => {
