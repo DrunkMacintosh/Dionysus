@@ -10,6 +10,7 @@ datasource db {
 model Business {
   id              String   @id
   name            String
+  ownerEmail      String?
   maxTokensPerDay Int      @default(200000)
   createdAt       DateTime @default(now())
   products        Product[]
@@ -22,6 +23,7 @@ model Business {
   waypoints       RouteWaypoint[]
   routeActions    RouteAction[]
   assets          Asset[]
+  magicLinks      MagicLink[]
 }
 
 model Product {
@@ -175,6 +177,19 @@ model Asset {
   kind          String
   contentJson   String
   createdAt     DateTime @default(now())
+
+  @@index([businessId])
+}
+
+model MagicLink {
+  id         String    @id @default(cuid())
+  businessId String
+  business   Business  @relation(fields: [businessId], references: [id])
+  email      String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdAt  DateTime  @default(now())
 
   @@index([businessId])
 }
