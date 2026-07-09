@@ -24,6 +24,14 @@ describe("D27.1 — tool schemas", () => {
       expect(parsed.success, `tool ${name} must reject businessId`).toBe(false);
     }
   });
+
+  it("plan tools are registered and businessId-free; upsert_route_action has no status field", () => {
+    for (const name of ["create_objective", "persist_route", "persist_waypoint", "upsert_route_action"]) {
+      expect(Object.keys(TOOL_SCHEMAS), name).toContain(name);
+      expect(Object.keys(TOOL_SCHEMAS[name as keyof typeof TOOL_SCHEMAS]), name).not.toContain("businessId");
+    }
+    expect(Object.keys(TOOL_SCHEMAS.upsert_route_action)).not.toContain("status");
+  });
 });
 
 describe("buildServer", () => {

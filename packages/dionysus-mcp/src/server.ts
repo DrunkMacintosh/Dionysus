@@ -6,6 +6,16 @@ import { readProduct } from "./tools/read-product.js";
 import { extractBrand } from "./tools/extract-brand.js";
 import { recordCost, checkBudget } from "./tools/cost-budget.js";
 import { persistCase, type CaseInput } from "./tools/persist-case.js";
+import {
+  createObjective,
+  persistRoute,
+  persistWaypoint,
+  upsertRouteAction,
+  type ObjectiveInput,
+  type RouteInput,
+  type WaypointInput,
+  type RouteActionInput,
+} from "./tools/plan.js";
 
 /** Single source of truth for tool input shapes.
  *  INVARIANT (D27.1): no shape ever includes businessId — identity is ambient. */
@@ -29,6 +39,22 @@ export const TOOL_SCHEMAS = {
     insight: z.string(),
     sources: z.unknown(),
     confidence: z.number().min(0).max(1),
+  },
+  create_objective: {
+    kind: z.string().min(1), target: z.string().min(1), metric: z.string().min(1),
+    dueDate: z.string().optional(), status: z.string().optional(),
+  },
+  persist_route: {
+    objectiveId: z.string().min(1), source: z.enum(["case", "composed"]),
+    caseRef: z.string().optional(), status: z.string().optional(),
+  },
+  persist_waypoint: {
+    routeId: z.string().min(1), order: z.number().int().min(1),
+    title: z.string().min(1), goal: z.string().min(1), status: z.string().optional(),
+  },
+  upsert_route_action: {
+    waypointId: z.string().min(1), employeeRole: z.string().min(1), type: z.string().min(1),
+    rationale: z.string().optional(), features: z.unknown(),
   },
 } satisfies Record<string, ZodRawShape>;
 
@@ -87,6 +113,42 @@ export function buildServer(identity: Identity): McpServer {
       inputSchema: TOOL_SCHEMAS.persist_case,
     },
     async (args) => asText(await persistCase(identity, args as CaseInput)),
+  );
+
+  server.registerTool(
+    "create_objective",
+    {
+      description: "Create the founder's measurable objective (north star).",
+      inputSchema: TOOL_SCHEMAS.create_objective,
+    },
+    async (args) => asText(await createObjective(identity, args as ObjectiveInput)),
+  );
+
+  server.registerTool(
+    "persist_route",
+    {
+      description: "Persist a route toward an objective (scope-checked).",
+      inputSchema: TOOL_SCHEMAS.persist_route,
+    },
+    async (args) => asText(await persistRoute(identity, args as RouteInput)),
+  );
+
+  server.registerTool(
+    "persist_waypoint",
+    {
+      description: "Persist an ordered waypoint on a route.",
+      inputSchema: TOOL_SCHEMAS.persist_waypoint,
+    },
+    async (args) => asText(await persistWaypoint(identity, args as WaypointInput)),
+  );
+
+  server.registerTool(
+    "upsert_route_action",
+    {
+      description: "Create a proposed route action (status is server-set to 'proposed').",
+      inputSchema: TOOL_SCHEMAS.upsert_route_action,
+    },
+    async (args) => asText(await upsertRouteAction(identity, args as RouteActionInput)),
   );
 
   return server;
