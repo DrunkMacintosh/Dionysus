@@ -53,6 +53,37 @@ async function recordGatewayCall(
   });
 }
 
+/**
+ * Write the ledger entry, making a failed write OBSERVABLE rather than silent.
+ * A dropped write means unmetered spend (the daily cap under-counts), so on
+ * failure we emit a structured, greppable stderr line and report recorded:false
+ * to the caller — which decides the safe fail-direction (withhold on the
+ * non-streaming path; the log is the only record once bytes are already sent).
+ */
+export async function recordOrReport(
+  identity: Identity,
+  model: string,
+  usage: GatewayUsage,
+  writeFn: typeof recordGatewayCall = recordGatewayCall,
+): Promise<{ recorded: boolean }> {
+  try {
+    await writeFn(identity, model, usage);
+    return { recorded: true };
+  } catch (e) {
+    console.error(
+      JSON.stringify({
+        evt: "gateway:ledger_write_failed",
+        businessId: identity.businessId,
+        model,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        err: String(e),
+      }),
+    );
+    return { recorded: false };
+  }
+}
+
 export function createGatewayHandler(
   identity: Identity,
   cfg: GatewayConfig,
@@ -94,7 +125,7 @@ export function createGatewayHandler(
       return sendJson(res, gate.status, gate.body);
     }
 
-    const upstreamRes = await request(`${cfg.upstreamUrl}${COMPLETIONS_PATH}`, {
+    const upstreamRes = await request(`${cfg.upstreamUrl.replace(/\/+$/, "")}${COMPLETIONS_PATH}`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -115,7 +146,19 @@ export function createGatewayHandler(
       usage = { inputTokens: 0, outputTokens: 0, usageMissing: true };
     }
     // Write BEFORE responding: at-most-once accounting, deterministic tests.
-    await recordGatewayCall(identity, model, usage);
+    // A failed write is unmetered spend — withhold the response (client may
+    // retry; the retry re-gates) rather than serve un-accounted-for tokens.
+    const { recorded } = await recordOrReport(identity, model, usage);
+    if (!recorded) {
+      return sendJson(
+        res,
+        502,
+        errorBody(
+          "metering_failed",
+          "Upstream call succeeded but the usage could not be recorded; response withheld.",
+        ),
+      );
+    }
     res.writeHead(upstreamRes.statusCode, {
       "content-type": String(upstreamRes.headers["content-type"] ?? "application/json"),
     });
@@ -134,8 +177,11 @@ export function createGatewayHandler(
 
   return (req, res) => {
     void handle(req, res).catch((e) => {
+      // Log the real error server-side; never echo upstream host / DB internals
+      // back to the client.
+      console.error(JSON.stringify({ evt: "gateway:handler_error", err: String(e) }));
       if (!res.headersSent) {
-        sendJson(res, 502, errorBody("upstream_error", e instanceof Error ? e.message : String(e)));
+        sendJson(res, 502, errorBody("upstream_error", "Upstream request failed."));
       } else {
         res.end();
       }

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import http from "node:http";
 import { request } from "undici";
-import { createGatewayHandler, type GatewayConfig } from "../src/gateway/proxy.js";
+import { createGatewayHandler, recordOrReport, type GatewayConfig } from "../src/gateway/proxy.js";
 import { prisma } from "../src/db.js";
 
 const IDENTITY = { businessId: "biz_proxy" };
@@ -122,5 +122,21 @@ describe("gateway proxy (non-streaming)", () => {
     expect(body.error.type).toBe("budget_exhausted");
     expect(upstreamHits).toBe(before);
     await prisma.business.update({ where: { id: "biz_proxy" }, data: { maxTokensPerDay: 100000 } });
+  });
+});
+
+describe("recordOrReport (metering observability)", () => {
+  it("reports recorded:false and logs a structured line when the write fails", async () => {
+    const boom = async () => { throw new Error("db down"); };
+    const errs: string[] = [];
+    const orig = console.error;
+    console.error = (msg: string) => { errs.push(String(msg)); };
+    try {
+      const r = await recordOrReport({ businessId: "biz_x" }, "m", { inputTokens: 1, outputTokens: 2, usageMissing: false }, boom as never);
+      expect(r.recorded).toBe(false);
+      expect(errs.some((l) => l.includes("gateway:ledger_write_failed") && l.includes("biz_x"))).toBe(true);
+    } finally {
+      console.error = orig;
+    }
   });
 });
