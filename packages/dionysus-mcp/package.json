@@ -11,14 +11,14 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@prisma/client": "^7.8.0",
+    "@prisma/client": "^6.19.3",
     "cheerio": "^1.2.0",
     "undici": "^8.7.0",
     "zod": "^3"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
-    "prisma": "^7.8.0",
+    "prisma": "^6.19.3",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   }

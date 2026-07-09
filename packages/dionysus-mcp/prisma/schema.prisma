@@ -1,0 +1,71 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Business {
+  id              String   @id
+  name            String
+  maxTokensPerDay Int      @default(200000)
+  createdAt       DateTime @default(now())
+  products        Product[]
+  brandKits       BrandKit[]
+  llmCalls        LlmCall[]
+  creditEntries   CreditLedger[]
+}
+
+model Product {
+  id          String   @id @default(cuid())
+  businessId  String
+  business    Business @relation(fields: [businessId], references: [id])
+  url         String
+  readTier    Int
+  title       String?
+  description String?
+  text        String?
+  createdAt   DateTime @default(now())
+
+  @@index([businessId])
+}
+
+model BrandKit {
+  id         String   @id @default(cuid())
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id])
+  url        String
+  colorsJson String
+  fontsJson  String
+  createdAt  DateTime @default(now())
+
+  @@index([businessId])
+}
+
+model LlmCall {
+  id           String   @id @default(cuid())
+  businessId   String
+  business     Business @relation(fields: [businessId], references: [id])
+  model        String
+  inputTokens  Int
+  outputTokens Int
+  costUsd      Float?
+  note         String?
+  ts           DateTime @default(now())
+
+  @@index([businessId, ts])
+}
+
+model CreditLedger {
+  id         String   @id @default(cuid())
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id])
+  delta      Int
+  reason     String
+  ref        String?
+  ts         DateTime @default(now())
+
+  @@index([businessId])
+}
