@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "prisma db push --force-reset --skip-generate && vitest run",
+    "test": "node scripts/reset-test-db.mjs && vitest run",
     "test:unit": "vitest run",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js"
