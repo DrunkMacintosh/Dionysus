@@ -138,6 +138,7 @@ model RouteWaypoint {
   actions    RouteAction[]
 
   @@index([businessId])
+  @@unique([routeId, order])
 }
 
 model RouteAction {
@@ -153,6 +154,10 @@ model RouteAction {
   rationale    String?
   featuresJson String   @default("{}")
   metricsJson  String?
+  approvedAt     DateTime?
+  approvedBy     String?
+  runId          String?
+  rejectionCount Int      @default(0)
   assetId      String?
   assets       Asset[]
   createdAt    DateTime @default(now())
