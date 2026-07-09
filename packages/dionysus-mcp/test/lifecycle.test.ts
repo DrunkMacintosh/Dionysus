@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeAll } from "vitest";
+import { createHash } from "node:crypto";
 import { prisma } from "../src/db.js";
+import { hashContent } from "../src/lib/content-hash.js";
+import { persistAsset, setActionAsset } from "../src/tools/asset.js";
 
 const BIZ = "biz_lifecycle";
 
@@ -38,5 +41,35 @@ describe("lifecycle schema", () => {
     await prisma.routeWaypoint.create({ data: { businessId: BIZ, routeId: route.id, order: 2, title: "a", goal: "g", status: "locked" } });
     await expect(prisma.routeWaypoint.create({ data: { businessId: BIZ, routeId: route.id, order: 2, title: "b", goal: "g", status: "locked" } }))
       .rejects.toThrow(/unique/i);
+  });
+});
+
+describe("content hash binding (D29)", () => {
+  it("hashContent is sha256 hex over the exact string", () => {
+    const s = JSON.stringify({ body: "hello" });
+    expect(hashContent(s)).toBe(createHash("sha256").update(s, "utf8").digest("hex"));
+    expect(hashContent(s)).toHaveLength(64);
+  });
+
+  it("setActionAsset binds contentHash to the linked asset's stored contentJson", async () => {
+    const { action } = await makeChain(BIZ);
+    const { assetId } = await persistAsset({ businessId: BIZ },
+      { channel: "x", kind: "post", content: { body: "draft v1" }, routeActionId: action.id });
+    await setActionAsset({ businessId: BIZ }, action.id, assetId);
+    const bound = await prisma.routeAction.findUnique({ where: { id: action.id } });
+    const asset = await prisma.asset.findUnique({ where: { id: assetId } });
+    expect(bound!.contentHash).toBe(hashContent(asset!.contentJson));
+    expect(bound!.contentHash).not.toBe("");
+  });
+
+  it("a later asset edit does NOT silently move the bound hash (mismatch stays detectable)", async () => {
+    const { action } = await makeChain(BIZ);
+    const { assetId } = await persistAsset({ businessId: BIZ },
+      { channel: "x", kind: "post", content: { body: "original" }, routeActionId: action.id });
+    await setActionAsset({ businessId: BIZ }, action.id, assetId);
+    await prisma.asset.update({ where: { id: assetId }, data: { contentJson: JSON.stringify({ body: "tampered" }) } });
+    const after = await prisma.routeAction.findUnique({ where: { id: action.id } });
+    const tampered = await prisma.asset.findUnique({ where: { id: assetId } });
+    expect(after!.contentHash).not.toBe(hashContent(tampered!.contentJson));
   });
 });
