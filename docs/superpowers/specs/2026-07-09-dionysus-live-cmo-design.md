@@ -1,7 +1,7 @@
 # Design: Dionysus — a live, per-business AI CMO on Hermes Agent
 
 **Date:** 2026-07-09
-**Status:** DRAFT v3.1 — full-design review applied (2026-07-09): wedge-first build inversion (D26), identity & custody redesign (D27), mechanical contracts (D28–D30), USP commitment (D31); awaiting user review
+**Status:** DRAFT v3.2 — full-design review applied (2026-07-09): wedge-first build inversion (D26), identity & custody redesign (D27), mechanical contracts (D28–D30), USP commitment + winnability conditions (D31, W0); awaiting user review
 **Scope:** Two-phase product. **Phase W (the wedge):** the accountable AI CMO for technical founders (D31), on the existing Next.js pipeline — objective-first, case-led strategy, drafts, verified send, attribution + weekly CMO Report — shipped in weeks and validated with paying founders. **Phase P (the platform):** the live agentic CMO on the Hermes Agent runtime described in §1–§17, built when W's revenue validates it. The deterministic step-engine and hand-rolled Stage-1 orchestration/memory layers are still superseded — but by W's slimmer pipeline first, and the Hermes department second.
 
 ## Name & metaphor
