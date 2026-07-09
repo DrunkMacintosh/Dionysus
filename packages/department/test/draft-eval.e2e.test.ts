@@ -5,6 +5,7 @@ import type { Harness, AgentDef } from "../src/llm/types.js";
 
 const A = { businessId: "biz_deval_a" };
 let waypointId = "";
+let executedActionId = "";
 
 beforeAll(async () => {
   for (const id of [A.businessId]) {
@@ -23,7 +24,8 @@ beforeAll(async () => {
     await prisma.routeAction.create({ data: { businessId: A.businessId, waypointId: wp.id, employeeRole: "copywriter", type: "post", status: "proposed", featuresJson: JSON.stringify({ channel: ch }) } });
   }
   // a NON-proposed action must NOT be drafted
-  await prisma.routeAction.create({ data: { businessId: A.businessId, waypointId: wp.id, employeeRole: "copywriter", type: "post", status: "executed", featuresJson: JSON.stringify({ channel: "linkedin" }) } });
+  const executed = await prisma.routeAction.create({ data: { businessId: A.businessId, waypointId: wp.id, employeeRole: "copywriter", type: "post", status: "executed", featuresJson: JSON.stringify({ channel: "linkedin" }) } });
+  executedActionId = executed.id;
 });
 
 // A harness that echoes the channel it was asked to draft for; the eval checks
@@ -46,9 +48,12 @@ describe("§15 stage-3b eval gate — copywriter fan-out invariants", () => {
     const assets = await prisma.asset.findMany({ where: { businessId: A.businessId } });
     expect(assets).toHaveLength(3);                                       // one per proposed action
     expect(assets.every((a) => a.routeActionId)).toBe(true);             // all linked
-    // no draft for the executed (linkedin) action
-    const linkedinAsset = await prisma.asset.findFirst({ where: { businessId: A.businessId, channel: "linkedin" } });
-    expect(linkedinAsset).toBeNull();
+    // no draft for the executed action — keyed on the action id so it holds
+    // regardless of what channel a wrongly-drafted asset would carry (the harness
+    // channel fallback maps unknown channels to "x", never "linkedin")
+    expect(await prisma.asset.findFirst({ where: { routeActionId: executedActionId } })).toBeNull();
+    const executed = await prisma.routeAction.findUnique({ where: { id: executedActionId } });
+    expect(executed?.assetId).toBeNull();
     // channel-native: the drafted channel matches the action's feature channel
     for (const d of res.drafts) {
       const action = await prisma.routeAction.findUnique({ where: { id: d.actionId } });
