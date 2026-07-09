@@ -29,26 +29,33 @@ export async function scrapeLadder(
   } catch (e) {
     return { tier: 4, url, error: e instanceof Error ? e.message : String(e) };
   }
-  if (!contentType.includes("html")) {
+  if (!contentType.toLowerCase().includes("html")) {
     return { tier: 4, url, error: `Not HTML (${contentType || "unknown content-type"})` };
   }
 
-  // Tier 2: metadata
-  const $ = cheerio.load(body);
-  const title =
-    $("title").first().text().trim() ||
-    $('meta[property="og:title"]').attr("content")?.trim() ||
-    undefined;
-  const description =
-    $('meta[name="description"]').attr("content")?.trim() ||
-    $('meta[property="og:description"]').attr("content")?.trim() ||
-    undefined;
+  // Parse + extract. Any parser/traversal failure (e.g. cheerio's recursive
+  // .text() blowing the stack on adversarially deep HTML) degrades to tier 4 —
+  // the load-bearing "couldn't read, never throw" invariant (spec §14).
+  try {
+    // Tier 2: metadata
+    const $ = cheerio.load(body);
+    const title =
+      $("title").first().text().trim() ||
+      $('meta[property="og:title"]').attr("content")?.trim() ||
+      undefined;
+    const description =
+      $('meta[name="description"]').attr("content")?.trim() ||
+      $('meta[property="og:description"]').attr("content")?.trim() ||
+      undefined;
 
-  // Tier 3: visible text
-  $("script, style, noscript, svg, nav, footer").remove();
-  const text = $("body").text().replace(/\s+/g, " ").trim().slice(0, TEXT_CAP) || undefined;
+    // Tier 3: visible text
+    $("script, style, noscript, svg, nav, footer").remove();
+    const text = $("body").text().replace(/\s+/g, " ").trim().slice(0, TEXT_CAP) || undefined;
 
-  if (text) return { tier: 3, url, title, description, text };
-  if (title || description) return { tier: 2, url, title, description };
-  return { tier: 1, url };
+    if (text) return { tier: 3, url, title, description, text };
+    if (title || description) return { tier: 2, url, title, description };
+    return { tier: 1, url };
+  } catch (e) {
+    return { tier: 4, url, error: e instanceof Error ? e.message : String(e) };
+  }
 }

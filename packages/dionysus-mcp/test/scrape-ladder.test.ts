@@ -24,6 +24,9 @@ beforeAll(async () => {
       res.writeHead(200, { "content-type": "text/html" }); res.end(PAGE);
     } else if (req.url === "/binary") {
       res.writeHead(200, { "content-type": "application/octet-stream" }); res.end("BLOB");
+    } else if (req.url === "/deep") {
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end("<html><body>" + "<div>".repeat(5000) + "x" + "</div>".repeat(5000) + "</body></html>");
     } else { res.writeHead(500); res.end("boom"); }
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -56,6 +59,12 @@ describe("scrapeLadder", () => {
   it("returns tier 4 for non-HTML content", async () => {
     const r = await scrapeLadder(`http://local.test:${port}/binary`, testOpts);
     expect(r.tier).toBe(4);
+  });
+
+  it("returns tier 4 (never throws) on pathologically nested HTML", async () => {
+    const r = await scrapeLadder(`http://local.test:${port}/deep`, testOpts);
+    expect(r.tier).toBe(4);
+    expect(r.error).toBeTruthy();
   });
 });
 
