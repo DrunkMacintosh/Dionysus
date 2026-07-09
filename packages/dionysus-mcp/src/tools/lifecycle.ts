@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import type { Identity } from "../identity.js";
 import { hashContent } from "../lib/content-hash.js";
@@ -36,32 +37,55 @@ export async function assertContentBound(identity: Identity, routeActionId: stri
   await assertBound(identity, action);
 }
 
+/**
+ * Concurrency backstop (D29 TOCTOU): the write itself re-asserts the source status.
+ * `assertTransition` above still runs first for the FRIENDLY allowed-from error message,
+ * but between that check and this write another call could have advanced the row. Scoping
+ * the updateMany by the source status (and businessId) means a concurrent transition writes
+ * first and this one matches zero rows — the loser throws instead of double-writing.
+ */
+async function transitionOrThrow(
+  actionId: string,
+  businessId: string,
+  fromStatus: Prisma.RouteActionWhereInput["status"],
+  data: Prisma.RouteActionUpdateManyMutationInput,
+): Promise<void> {
+  const { count } = await prisma.routeAction.updateMany({
+    where: { id: actionId, businessId, status: fromStatus },
+    data,
+  });
+  if (count === 0) {
+    throw new Error(`Invalid transition: RouteAction ${actionId} changed state concurrently.`);
+  }
+}
+
 /** Cockpit-path only. Never registered as an MCP tool (D29: approval is never agent-asserted). */
 export async function approveAction(identity: Identity, input: ApproveInput): Promise<void> {
   const action = await loadScopedAction(identity, input.routeActionId);
   assertTransition(action, ["proposed"], "approved");
   await assertBound(identity, action);
-  await prisma.routeAction.update({ where: { id: action.id },
-    data: { status: "approved", approvedAt: new Date(), approvedBy: input.principal } });
+  await transitionOrThrow(action.id, identity.businessId, "proposed",
+    { status: "approved", approvedAt: new Date(), approvedBy: input.principal });
 }
 
 export async function rejectAction(identity: Identity, input: RejectInput): Promise<void> {
   const action = await loadScopedAction(identity, input.routeActionId);
   assertTransition(action, ["proposed", "executing"], "rejected");
-  await prisma.routeAction.update({ where: { id: action.id },
-    data: { status: "rejected", rejectionCount: { increment: 1 } } });
+  await transitionOrThrow(action.id, identity.businessId, { in: ["proposed", "executing"] },
+    { status: "rejected", rejectionCount: { increment: 1 } });
 }
 
 export async function startExecution(identity: Identity, input: StartExecutionInput): Promise<void> {
   const action = await loadScopedAction(identity, input.routeActionId);
   assertTransition(action, ["approved"], "executing");
   await assertBound(identity, action); // the send path refuses content whose hash differs from the approved one
-  await prisma.routeAction.update({ where: { id: action.id },
-    data: { status: "executing", runId: input.runId } });
+  await transitionOrThrow(action.id, identity.businessId, "approved",
+    { status: "executing", runId: input.runId });
 }
 
 export async function completeExecution(identity: Identity, input: CompleteExecutionInput): Promise<void> {
   const action = await loadScopedAction(identity, input.routeActionId);
   assertTransition(action, ["executing"], "executed");
-  await prisma.routeAction.update({ where: { id: action.id }, data: { status: "executed" } });
+  await transitionOrThrow(action.id, identity.businessId, "executing",
+    { status: "executed" });
 }

@@ -160,4 +160,19 @@ describe("D29 lifecycle transitions (server-validated)", () => {
     await expect(assertContentBound({ businessId: "biz_lc_other" }, actionId))
       .rejects.toThrow(/not found|scope/i);
   });
+
+  it("concurrent double-approval: exactly one wins, the loser throws (write-layer guard)", async () => {
+    const { actionId } = await boundAction(BIZ, "race me");
+    const results = await Promise.allSettled([
+      approveAction({ businessId: BIZ }, { routeActionId: actionId, principal: "a" }),
+      approveAction({ businessId: BIZ }, { routeActionId: actionId, principal: "b" }),
+    ]);
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter((r) => r.status === "rejected");
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    const a = await prisma.routeAction.findUnique({ where: { id: actionId } });
+    expect(a!.status).toBe("approved");
+    expect(["a", "b"]).toContain(a!.approvedBy); // exactly one principal's approval, not a blend
+  });
 });
