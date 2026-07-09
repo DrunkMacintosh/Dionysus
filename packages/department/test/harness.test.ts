@@ -54,6 +54,15 @@ describe("sdk harness (against a mock OpenAI-compatible server)", () => {
     const result = await harness.runAgent(def, "go");
     expect(executed).toEqual(["ping"]);
     expect(result.finalOutput).toContain("FINAL: pong");
+
+    // Protocol shape: the loop must append the tool result to the SECOND request
+    // with the correct chat-completions tool-message shape ({role, tool_call_id}).
+    const secondBody = JSON.parse(seenBodies[1]!) as {
+      messages: Array<{ role: string; tool_call_id?: string }>;
+    };
+    const toolMsg = secondBody.messages.find((m) => m.role === "tool");
+    expect(toolMsg).toBeDefined();
+    expect(toolMsg?.tool_call_id).toBe("t1");
   });
 
   it("completeOnce returns the message content", async () => {

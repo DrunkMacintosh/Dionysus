@@ -9,7 +9,6 @@
     "smoke": "node scripts/live-smoke.mjs"
   },
   "dependencies": {
-    "@openai/agents": "latest",
     "openai": "latest",
     "zod": "^3",
     "undici": "^7",

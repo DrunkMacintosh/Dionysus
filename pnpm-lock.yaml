@@ -10,9 +10,6 @@ importers:
 
   packages/department:
     dependencies:
-      '@openai/agents':
-        specifier: latest
-        version: 0.13.0(ws@8.21.0)(zod@3.25.76)
       dionysus-mcp:
         specifier: workspace:*
         version: link:../dionysus-mcp
@@ -102,29 +99,6 @@ packages:
     peerDependencies:
       '@emnapi/core': ^1.7.1
       '@emnapi/runtime': ^1.7.1
-
-  '@openai/agents-core@0.13.0':
-    resolution: {integrity: sha512-Y1ld/hKE1wa9UqII6fcN7FbPxUhAeREndX76xMfFj6cAJWMl8LkwV6cyNuq3rXuWr1h7YkVCPhK4Do4VoVKwCw==}
-    peerDependencies:
-      zod: ^4.0.0
-    peerDependenciesMeta:
-      zod:
-        optional: true
-
-  '@openai/agents-openai@0.13.0':
-    resolution: {integrity: sha512-cKlRgXnIOpJtDiI0l4JGp4SX9eQj6H2UPVKZNGH1ERJI3HG5TBmhxVIOm+XBKtiKyg4jEd0ES9LFSvy2Tygmxg==}
-    peerDependencies:
-      zod: ^4.0.0
-
-  '@openai/agents-realtime@0.13.0':
-    resolution: {integrity: sha512-DVKNCsTXcxjjCcufWSbTRjQzm8adm1cV9BwOjU0yGXTAA9+ohS1gWj82np0dsD8hIvGjMQpeZlnQjTKpcl3QRg==}
-    peerDependencies:
-      zod: ^4.0.0
-
-  '@openai/agents@0.13.0':
-    resolution: {integrity: sha512-8rMgMPSJR7fDVX/4nn6vCwqmJvmtR754U0scsrsoMo9iHyfTDdtyPQALoMaqMDeLCJsWV4BFvdEeevgbCbeDdw==}
-    peerDependencies:
-      zod: ^4.0.0
 
   '@oxc-project/types@0.139.0':
     resolution: {integrity: sha512-r9gHphtCs+1M7J0pw6Sn/hh/Wpa/iQrOOkrNAlVLF/gHq+/CJmHIWKKUUhdWjcD6CIa8idarspCsASiXCXvFUw==}
@@ -268,9 +242,6 @@ packages:
 
   '@types/node@26.1.1':
     resolution: {integrity: sha512-nxAkRSVkN1Y0JC1W8ky/fTfkGsMmcrRsbx+3XoZE+rMOX71kLYTV7fLXpqud1GpbpP5TuffXFqfX7fH2GgZREw==}
-
-  '@types/ws@8.18.1':
-    resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     resolution: {integrity: sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ==}
@@ -1307,69 +1278,6 @@ snapshots:
       '@tybys/wasm-util': 0.10.3
     optional: true
 
-  '@openai/agents-core@0.13.0(ws@8.21.0)(zod@3.25.76)':
-    dependencies:
-      debug: 4.4.3
-      openai: 6.45.0(ws@8.21.0)(zod@3.25.76)
-    optionalDependencies:
-      '@modelcontextprotocol/sdk': 1.29.0(zod@3.25.76)
-      zod: 3.25.76
-    transitivePeerDependencies:
-      - '@aws-sdk/credential-provider-node'
-      - '@cfworker/json-schema'
-      - '@smithy/hash-node'
-      - '@smithy/signature-v4'
-      - supports-color
-      - ws
-
-  '@openai/agents-openai@0.13.0(ws@8.21.0)(zod@3.25.76)':
-    dependencies:
-      '@openai/agents-core': 0.13.0(ws@8.21.0)(zod@3.25.76)
-      debug: 4.4.3
-      openai: 6.45.0(ws@8.21.0)(zod@3.25.76)
-      zod: 3.25.76
-    transitivePeerDependencies:
-      - '@aws-sdk/credential-provider-node'
-      - '@cfworker/json-schema'
-      - '@smithy/hash-node'
-      - '@smithy/signature-v4'
-      - supports-color
-      - ws
-
-  '@openai/agents-realtime@0.13.0(zod@3.25.76)':
-    dependencies:
-      '@openai/agents-core': 0.13.0(ws@8.21.0)(zod@3.25.76)
-      '@types/ws': 8.18.1
-      debug: 4.4.3
-      ws: 8.21.0
-      zod: 3.25.76
-    transitivePeerDependencies:
-      - '@aws-sdk/credential-provider-node'
-      - '@cfworker/json-schema'
-      - '@smithy/hash-node'
-      - '@smithy/signature-v4'
-      - bufferutil
-      - supports-color
-      - utf-8-validate
-
-  '@openai/agents@0.13.0(ws@8.21.0)(zod@3.25.76)':
-    dependencies:
-      '@openai/agents-core': 0.13.0(ws@8.21.0)(zod@3.25.76)
-      '@openai/agents-openai': 0.13.0(ws@8.21.0)(zod@3.25.76)
-      '@openai/agents-realtime': 0.13.0(zod@3.25.76)
-      debug: 4.4.3
-      openai: 6.45.0(ws@8.21.0)(zod@3.25.76)
-      zod: 3.25.76
-    transitivePeerDependencies:
-      - '@aws-sdk/credential-provider-node'
-      - '@cfworker/json-schema'
-      - '@smithy/hash-node'
-      - '@smithy/signature-v4'
-      - bufferutil
-      - supports-color
-      - utf-8-validate
-      - ws
-
   '@oxc-project/types@0.139.0': {}
 
   '@prisma/client@6.19.3(prisma@6.19.3(typescript@7.0.2))(typescript@7.0.2)':
@@ -1477,10 +1385,6 @@ snapshots:
   '@types/node@26.1.1':
     dependencies:
       undici-types: 8.3.0
-
-  '@types/ws@8.18.1':
-    dependencies:
-      '@types/node': 26.1.1
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     optional: true
@@ -2353,7 +2257,8 @@ snapshots:
 
   wrappy@1.0.2: {}
 
-  ws@8.21.0: {}
+  ws@8.21.0:
+    optional: true
 
   zod-to-json-schema@3.25.2(zod@3.25.76):
     dependencies:
