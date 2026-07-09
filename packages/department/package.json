@@ -1,0 +1,23 @@
+{
+  "name": "department",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.json",
+    "smoke": "node scripts/live-smoke.mjs"
+  },
+  "dependencies": {
+    "@openai/agents": "latest",
+    "openai": "latest",
+    "zod": "^3",
+    "undici": "^7",
+    "dionysus-mcp": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^7",
+    "vitest": "^4",
+    "@types/node": "^26"
+  }
+}
