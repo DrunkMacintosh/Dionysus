@@ -40,18 +40,74 @@ function v4InRange(ip: string, base: string, bits: number): boolean {
   return (v4ToLong(ip) & mask) === (v4ToLong(base) & mask);
 }
 
+// Expand any valid IPv6 string into its 8 16-bit hextets, handling "::"
+// compression and a trailing dotted-quad (e.g. ::ffff:127.0.0.1). Returns
+// null on anything unparseable → callers treat that as "not embedded v4".
+function ipv6ToHextets(ip: string): number[] | null {
+  let str = ip.toLowerCase().split("%")[0]!; // drop any zone id
+  // Fold a trailing dotted-quad into two hex hextets so the rest is pure hex.
+  if (str.includes(".")) {
+    const colon = str.lastIndexOf(":");
+    if (colon === -1) return null;
+    const parts = str.slice(colon + 1).split(".");
+    if (parts.length !== 4) return null;
+    const octets = parts.map(Number);
+    if (octets.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null;
+    const [a, b, c, d] = octets as [number, number, number, number];
+    const h1 = ((a << 8) | b).toString(16);
+    const h2 = ((c << 8) | d).toString(16);
+    str = `${str.slice(0, colon + 1)}${h1}:${h2}`;
+  }
+  const dbl = str.indexOf("::");
+  let groups: string[];
+  if (dbl !== -1) {
+    if (str.indexOf("::", dbl + 1) !== -1) return null; // more than one "::"
+    const head = str.slice(0, dbl).split(":").filter((g) => g !== "");
+    const tail = str.slice(dbl + 2).split(":").filter((g) => g !== "");
+    const missing = 8 - head.length - tail.length;
+    if (missing < 0) return null;
+    groups = [...head, ...new Array(missing).fill("0"), ...tail];
+  } else {
+    groups = str.split(":");
+  }
+  if (groups.length !== 8) return null;
+  const hextets = groups.map((g) => (/^[0-9a-f]{1,4}$/.test(g) ? parseInt(g, 16) : NaN));
+  if (hextets.some((h) => Number.isNaN(h))) return null;
+  return hextets;
+}
+
+// If the IPv6 address carries an embedded IPv4 — v4-mapped (::ffff:0:0/96) or
+// deprecated v4-compatible (::/96) — return that IPv4 as a dotted string, else
+// null. Detector triggers ONLY when the first five hextets are exactly zero and
+// hextet 6 ∈ {0x0000, 0xffff}; any global-unicast address (2000::/3, nonzero
+// leading hextet) can never match, so normal IPv6 is never mistaken for v4.
+function embeddedIpv4(hextets: number[]): string | null {
+  const firstFiveZero =
+    hextets[0] === 0 && hextets[1] === 0 && hextets[2] === 0 &&
+    hextets[3] === 0 && hextets[4] === 0;
+  if (!firstFiveZero) return null;
+  const h6 = hextets[5];
+  if (h6 !== 0 && h6 !== 0xffff) return null;
+  const h7 = hextets[6]!;
+  const h8 = hextets[7]!;
+  return `${(h7 >> 8) & 0xff}.${h7 & 0xff}.${(h8 >> 8) & 0xff}.${h8 & 0xff}`;
+}
+
 export function isPrivateIp(ip: string): boolean {
   if (net.isIPv4(ip)) {
     return PRIVATE_V4_RANGES.some(([base, bits]) => v4InRange(ip, base, bits));
   }
   if (net.isIPv6(ip)) {
     const lower = ip.toLowerCase();
-    // v4-mapped (::ffff:a.b.c.d) → recurse on the v4 part
-    const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-    if (mapped) return isPrivateIp(mapped[1]!);
     if (lower === "::" || lower === "::1") return true;      // unspecified / loopback
+    // Any embedded IPv4 (hex OR dotted, mapped OR compatible) → classify the v4.
+    const hextets = ipv6ToHextets(lower);
+    if (hextets) {
+      const v4 = embeddedIpv4(hextets);
+      if (v4 !== null) return isPrivateIp(v4);
+    }
     if (lower.startsWith("fc") || lower.startsWith("fd")) return true; // ULA fc00::/7
-    if (/^fe[89ab]/.test(lower)) return true;                 // link-local fe80::/10
+    if (/^fe[89abcdef]/.test(lower)) return true;             // link-local fe80::/10 + site-local fec0::/10
     if (lower.startsWith("ff")) return true;                  // multicast
     return false;
   }
