@@ -26,6 +26,7 @@ model Business {
   magicLinks      MagicLink[]
   digests         Digest[]
   simulations     SimulationResult[]
+  memoryNodes     MemoryNode[]
 }
 
 model Product {
@@ -223,6 +224,23 @@ model SimulationResult {
   predictionJson String
   confidence     Float
   createdAt      DateTime @default(now())
+
+  @@index([businessId])
+}
+
+model MemoryNode {
+  id         String   @id @default(cuid())
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id])
+  type       String   // waypoint|action|outcome|learning|market-observation|case|revision
+  role       String?
+  waypointId String?
+  title      String
+  body       String
+  confidence Float
+  sourceUrl  String?
+  tainted    Boolean  @default(false)
+  createdAt  DateTime @default(now())
 
   @@index([businessId])
 }
