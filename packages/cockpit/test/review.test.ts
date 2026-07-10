@@ -5,7 +5,8 @@ import { recordSimulation } from "dionysus-mcp/tools/simulation";
 import { recordObservation } from "dionysus-mcp/tools/memory";
 import { createObjective, persistRoute, persistWaypoint, upsertRouteAction } from "dionysus-mcp/tools/plan";
 import { approveAction, startExecution, completeExecution } from "dionysus-mcp/tools/lifecycle";
-import { listProposedDrafts, getRouteOverview, getDigestHeader, listSendQueue, listExecuted, isRenderableHttpUrl, listRadarObservations, getCmoReport, getTimeline } from "../src/lib/review";
+import { listProposedDrafts, getRouteOverview, getDigestHeader, listSendQueue, listExecuted, isRenderableHttpUrl, listRadarObservations, getCmoReport, getTimeline, getCraftBeliefs } from "../src/lib/review";
+import { persistCraftBelief } from "dionysus-mcp/tools/belief-graph";
 
 const A = { businessId: "biz_cockpit_rev" };
 const B = { businessId: "biz_cockpit_rev_other" };
@@ -416,5 +417,27 @@ describe("timeline outcomes (getTimeline attaches verified-live outcomes)", () =
     expect(view.hasRoute).toBe(true);
     expect(view.waypoints).toHaveLength(1);
     expect(view.waypoints[0]!.actions[0]!.outcome).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Craft beliefs service (getCraftBeliefs) — the read behind the "What I've learned"
+// page. A thin, identity-scoped wrapper over the mcp listCraftBeliefs: the LIVE craft
+// hypotheses Dionysus has formed from how the founder reviews drafts. Scoped like the
+// other cockpit reads — another tenant's belief never leaks.
+// ---------------------------------------------------------------------------
+describe("getCraftBeliefs", () => {
+  beforeAll(async () => {
+    for (const id of [A.businessId, B.businessId]) {
+      await prisma.memoryNode.deleteMany({ where: { businessId: id, type: "learning" } });
+    }
+    await persistCraftBelief(A, { role: "copywriter", featureKey: "channel=linkedin", belief: { confidence: 0.8, stance: "positive", lowConfidence: false, summary: "Tends to approve (5 accepted as-is, 0 rejected)." } });
+    await persistCraftBelief(B, { role: "copywriter", featureKey: "channel=x", belief: { confidence: 0.9, stance: "positive", lowConfidence: false, summary: "other tenant belief" } });
+  });
+
+  it("returns the identity's live beliefs, scoped — another tenant's belief never leaks", async () => {
+    const beliefs = await getCraftBeliefs(A);
+    expect(beliefs.map((b) => b.body)).toContain("Tends to approve (5 accepted as-is, 0 rejected).");
+    expect(beliefs.some((b) => b.body === "other tenant belief")).toBe(false); // B is scoped out
   });
 });

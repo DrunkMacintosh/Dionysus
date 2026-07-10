@@ -4,8 +4,10 @@ import { buildDailyDigest } from "dionysus-mcp/tools/digest";
 import { listObservations } from "dionysus-mcp/tools/memory";
 import { buildCmoReport, type CmoReport } from "dionysus-mcp/tools/cmo-report";
 import { mirrorPlanToGraph } from "dionysus-mcp/tools/memory-graph";
+import { listCraftBeliefs, type CraftBeliefView } from "dionysus-mcp/tools/belief-graph";
 
 export type { CmoReport };
+export type { CraftBeliefView };
 
 // ---------------------------------------------------------------------------
 // CMO report (Task 3) — the read behind the progress-to-objective home. This is
@@ -197,6 +199,17 @@ export async function listRadarObservations(identity: Identity, limit = 20): Pro
     nodeId: c.nodeId, title: c.title, body: c.body,
     sourceUrl: c.sourceUrl, confidence: c.confidence, createdAt: c.createdAt,
   }));
+}
+
+// ---------------------------------------------------------------------------
+// getCraftBeliefs (stage 5c) — the read behind the "What I've learned" page. A thin,
+// identity-scoped wrapper over the mcp listCraftBeliefs: the LIVE (non-superseded) craft
+// beliefs Dionysus has formed from how the founder reviews drafts. These are CRAFT
+// hypotheses (what the founder tends to accept), labeled with confidence — NEVER a
+// performance/market metric. NOT an MCP tool (the whitelist stays 11).
+// ---------------------------------------------------------------------------
+export async function getCraftBeliefs(identity: Identity, limit = 50): Promise<CraftBeliefView[]> {
+  return listCraftBeliefs(identity, { limit });
 }
 
 // ---------------------------------------------------------------------------

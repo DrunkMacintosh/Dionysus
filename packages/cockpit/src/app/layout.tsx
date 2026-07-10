@@ -12,6 +12,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <a href="/route">Route</a>
           <a href="/timeline">Timeline</a>
           <a href="/radar">Radar</a>
+          <a href="/learned">Learned</a>
           <a href="/drafts">Drafts</a>
           <a href="/send">Send</a>
           <a href="/report">Report</a>
