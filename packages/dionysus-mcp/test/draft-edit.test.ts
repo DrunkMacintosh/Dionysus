@@ -57,6 +57,23 @@ describe("editDraftContent (D22)", () => {
     expect(await prisma.asset.count({ where: { routeActionId: actionId } })).toBe(before);
   });
 
+  it("concurrent edits on the same action never lose churn (atomic increment)", async () => {
+    const { actionId } = await freshBoundAction(BIZ, "base");
+    const results = await Promise.allSettled([
+      editDraftContent({ businessId: BIZ }, { routeActionId: actionId, newBody: "base plus alpha" }),
+      editDraftContent({ businessId: BIZ }, { routeActionId: actionId, newBody: "base plus beta" }),
+    ]);
+    const fulfilled = results.filter((r): r is PromiseFulfilledResult<Awaited<ReturnType<typeof editDraftContent>>> => r.status === "fulfilled");
+    // Either both succeed or one loses the bind-guard race — both are acceptable. What MUST hold:
+    // the persisted cumulative editDistance equals the SUM of the per-edit distances that were
+    // actually applied (no increment clobbered by a stale read-modify-write). At least one edit
+    // must land (a fresh proposed action is editable).
+    expect(fulfilled.length).toBeGreaterThanOrEqual(1);
+    const sumOfDeltas = fulfilled.reduce((acc, r) => acc + r.value.editDistance, 0);
+    const action = await prisma.routeAction.findUnique({ where: { id: actionId } });
+    expect(action!.editDistance).toBe(sumOfDeltas);
+  });
+
   it("editing a non-proposed action is refused; the approved binding never moves", async () => {
     const { actionId, assetId } = await freshBoundAction(BIZ, "final copy");
     await approveAction({ businessId: BIZ }, { routeActionId: actionId, principal: "p" });
