@@ -138,12 +138,54 @@ describe("send queue service (listSendQueue / listExecuted)", () => {
   });
 });
 
+// Verified history is ordered by verifiedAt desc ("most-recently-went-live first"),
+// NOT createdAt. This fixture deliberately inverts the two orders: the row created
+// FIRST gets the LATER verifiedAt, so a lingering createdAt sort would fail this test.
+const EO = { businessId: "biz_cockpit_execorder" };
+
+describe("listExecuted ordering (verified history newest-first by verifiedAt)", () => {
+  let laterId = "";
+  let earlierId = "";
+
+  beforeAll(async () => {
+    await prisma.asset.deleteMany({ where: { businessId: EO.businessId } });
+    await prisma.routeAction.deleteMany({ where: { businessId: EO.businessId } });
+    await prisma.routeWaypoint.deleteMany({ where: { businessId: EO.businessId } });
+    await prisma.route.deleteMany({ where: { businessId: EO.businessId } });
+    await prisma.objective.deleteMany({ where: { businessId: EO.businessId } });
+    await prisma.business.upsert({ where: { id: EO.businessId }, create: { id: EO.businessId, name: EO.businessId }, update: {} });
+    const obj = await prisma.objective.create({ data: { businessId: EO.businessId, kind: "signups", target: "100", metric: "users", status: "active" } });
+    const route = await prisma.route.create({ data: { businessId: EO.businessId, objectiveId: obj.id, source: "case", status: "proposed" } });
+    const wp = await prisma.routeWaypoint.create({ data: { businessId: EO.businessId, routeId: route.id, order: 1, title: "Ship it", goal: "go live", status: "active" } });
+
+    // Created first -> later verifiedAt (June); created second -> earlier verifiedAt (Jan).
+    const laterVerified = await prisma.routeAction.create({ data: { businessId: EO.businessId, waypointId: wp.id, employeeRole: "copywriter", type: "post", status: "executed", postedUrl: "https://example.com/later", outcome: "verified" } });
+    const earlierVerified = await prisma.routeAction.create({ data: { businessId: EO.businessId, waypointId: wp.id, employeeRole: "copywriter", type: "post", status: "executed", postedUrl: "https://example.com/earlier", outcome: "verified" } });
+    await prisma.routeAction.update({ where: { id: laterVerified.id }, data: { verifiedAt: new Date("2026-06-01T00:00:00.000Z") } });
+    await prisma.routeAction.update({ where: { id: earlierVerified.id }, data: { verifiedAt: new Date("2026-01-01T00:00:00.000Z") } });
+    laterId = laterVerified.id;
+    earlierId = earlierVerified.id;
+  });
+
+  it("returns the row with the later verifiedAt first", async () => {
+    const executed = await listExecuted(EO);
+    expect(executed.map((c) => c.actionId)).toEqual([laterId, earlierId]);
+  });
+});
+
 describe("isRenderableHttpUrl (verified-history href guard)", () => {
   it("accepts http/https and rejects javascript:/data:/garbage/empty (stored-XSS guard)", () => {
     expect(isRenderableHttpUrl("https://example.com/x")).toBe(true);
     expect(isRenderableHttpUrl("http://news.ycombinator.com/item?id=1")).toBe(true);
+    expect(isRenderableHttpUrl("https://example.com/p")).toBe(true);
+    expect(isRenderableHttpUrl("http://localhost:3000/x")).toBe(true);
     expect(isRenderableHttpUrl("javascript:alert(1)")).toBe(false);
     expect(isRenderableHttpUrl("data:text/html,<script>alert(1)</script>")).toBe(false);
+    // Regression-lock extra vectors so a future denylist refactor can't slip them through.
+    expect(isRenderableHttpUrl("vbscript:msgbox(1)")).toBe(false);
+    expect(isRenderableHttpUrl("mailto:x@y.com")).toBe(false);
+    expect(isRenderableHttpUrl("//evil.com")).toBe(false); // protocol-relative: new URL throws with no base
+    expect(isRenderableHttpUrl(" javascript:alert(1)")).toBe(false); // leading space
     expect(isRenderableHttpUrl("not a url")).toBe(false);
     expect(isRenderableHttpUrl("")).toBe(false);
     expect(isRenderableHttpUrl(null)).toBe(false);

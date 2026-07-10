@@ -100,7 +100,7 @@ export type ExecutedCard = {
 export async function listExecuted(identity: Identity): Promise<ExecutedCard[]> {
   const actions = await prisma.routeAction.findMany({
     where: { businessId: identity.businessId, status: "executed" },
-    orderBy: { createdAt: "desc" }, // newest first
+    orderBy: { verifiedAt: "desc" }, // verified history newest-first (executed rows always have verifiedAt stamped)
   });
   const cards: ExecutedCard[] = [];
   for (const action of actions) {
