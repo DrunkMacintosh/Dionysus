@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { prisma } from "dionysus-mcp/db";
 import { persistAsset, setActionAsset } from "dionysus-mcp/tools/asset";
+import { recordSimulation } from "dionysus-mcp/tools/simulation";
 import { listProposedDrafts, getRouteOverview, getDigestHeader } from "../src/lib/review";
 
 const A = { businessId: "biz_cockpit_rev" };
@@ -32,6 +33,19 @@ describe("review service", () => {
     const drafts = await listProposedDrafts(A);
     expect(drafts).toHaveLength(1);
     expect(drafts[0]).toMatchObject({ actionId: boundActionId, channel: "hackernews", title: "Show HN", body: "We built X", waypointTitle: "Launch" });
+  });
+
+  it("attaches the LATEST simulation as a labeled prediction, parsed defensively", async () => {
+    await recordSimulation(A, { routeActionId: boundActionId, engine: "focus_group",
+      prediction: { engagementScore: 3, verdict: "old", topConcerns: [] }, confidence: 0.3 });
+    await recordSimulation(A, { routeActionId: boundActionId, engine: "focus_group",
+      prediction: { engagementScore: 7, verdict: "sharpened - ship it", topConcerns: ["length"] }, confidence: 0.65 });
+    const drafts = await listProposedDrafts(A);
+    const card = drafts.find((d) => d.actionId === boundActionId)!;
+    expect(card.simulation).not.toBeNull();
+    expect(card.simulation!.verdict).toBe("sharpened - ship it"); // latest wins
+    expect(card.simulation!.engagementScore).toBe(7);
+    expect(card.simulation!.confidence).toBeCloseTo(0.65);
   });
 
   it("route overview assembles objective -> waypoints -> actions", async () => {

@@ -6,6 +6,7 @@ export type DraftCard = {
   actionId: string; employeeRole: string; type: string;
   channel: string | null; title: string | null; body: string | null;
   waypointTitle: string; rationale: string | null; editDistance: number | null;
+  simulation: { engagementScore: number | null; verdict: string | null; topConcerns: string[]; confidence: number; createdAt: Date } | null;
 };
 
 export async function listProposedDrafts(identity: Identity): Promise<DraftCard[]> {
@@ -27,9 +28,27 @@ export async function listProposedDrafts(identity: Identity): Promise<DraftCard[
     } catch {
       body = null;
     }
+    const sim = await prisma.simulationResult.findFirst({
+      where: { routeActionId: action.id, businessId: identity.businessId },
+      orderBy: { createdAt: "desc" } });
+    let simulation: DraftCard["simulation"] = null;
+    if (sim) {
+      let engagementScore: number | null = null;
+      let verdict: string | null = null;
+      let topConcerns: string[] = [];
+      try {
+        const p = JSON.parse(sim.predictionJson) as { engagementScore?: unknown; verdict?: unknown; topConcerns?: unknown };
+        engagementScore = typeof p.engagementScore === "number" ? p.engagementScore : null;
+        verdict = typeof p.verdict === "string" ? p.verdict : null;
+        topConcerns = Array.isArray(p.topConcerns) ? p.topConcerns.filter((c): c is string => typeof c === "string") : [];
+      } catch {
+        /* malformed prediction renders as nulls, never throws */
+      }
+      simulation = { engagementScore, verdict, topConcerns, confidence: sim.confidence, createdAt: sim.createdAt };
+    }
     cards.push({ actionId: action.id, employeeRole: action.employeeRole, type: action.type,
       channel: asset.channel, title, body, waypointTitle: wp?.title ?? "", rationale: action.rationale,
-      editDistance: action.editDistance });
+      editDistance: action.editDistance, simulation });
   }
   return cards;
 }
