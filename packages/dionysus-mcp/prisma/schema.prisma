@@ -239,6 +239,7 @@ model MemoryNode {
   title      String
   body       String
   confidence Float
+  stance     String?  // 5c: belief polarity for `learning` nodes ("positive"|"negative"|"neutral"); null for other node types
   sourceUrl  String?
   sourceId   String?
   tainted    Boolean  @default(false)

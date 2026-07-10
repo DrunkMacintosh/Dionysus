@@ -3,7 +3,7 @@ import { prisma } from "../db.js";
 import type { Identity } from "../identity.js";
 
 /** True for a Prisma unique-constraint violation (P2002) — the concurrent-writer race we re-find on. */
-function isUniqueViolation(error: unknown): boolean {
+export function isUniqueViolation(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
 }
 
