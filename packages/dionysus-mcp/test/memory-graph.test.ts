@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../src/db.js";
-import { persistMemoryNode, persistMemoryEdge, mirrorPlanToGraph } from "../src/tools/memory-graph.js";
+import { persistMemoryNode, persistMemoryEdge, mirrorPlanToGraph, buildAgentContext } from "../src/tools/memory-graph.js";
 import { createObjective, persistRoute, persistWaypoint, upsertRouteAction } from "../src/tools/plan.js";
 import { persistAsset, setActionAsset } from "../src/tools/asset.js";
 import { approveAction, startExecution, completeExecution } from "../src/tools/lifecycle.js";
@@ -379,5 +379,104 @@ describe("mirrorPlanToGraph — outcome mirror (executed→outcome node + caused
     expect(outcome).not.toBeNull();
     expect(outcome?.title).toBe("went live on email"); // fallback to action.type when no bound asset resolves
     expect(outcome?.body).toBe(POSTED_URL); // still the verified-live URL, not a fabricated metric
+  });
+});
+
+describe("buildAgentContext — plan-anchored causal recall (pure scoped read, budget-capped)", () => {
+  const A = { businessId: "biz_agentctx_a" };
+  const B = { businessId: "biz_agentctx_b" };
+  const NOW = new Date("2026-07-10T12:00:00.000Z");
+  const POSTED_URL = "https://instagram.com/p/agentctx777";
+
+  let routeId: string;
+  let wp1: string;
+  let wp2: string;
+  let executedActionId: string;
+  let proposedActionId: string;
+  let emptyRouteId: string;
+
+  beforeAll(async () => {
+    for (const id of [A.businessId, B.businessId]) {
+      await prisma.business.upsert({ where: { id }, create: { id, name: id }, update: {} });
+      await prisma.memoryEdge.deleteMany({ where: { businessId: id } });
+      await prisma.memoryNode.deleteMany({ where: { businessId: id } });
+    }
+
+    // Route with 2 waypoints; the ACTIONS live on the LAST waypoint (the default anchor), so the
+    // default-anchor neighborhood is non-empty and its outcome is recalled.
+    const { objectiveId } = await createObjective(A, { kind: "growth", target: "1k signups", metric: "signups" });
+    ({ routeId } = await persistRoute(A, { objectiveId, source: "composed" }));
+    ({ waypointId: wp1 } = await persistWaypoint(A, { routeId, order: 1, title: "WP One", goal: "Goal one" }));
+    ({ waypointId: wp2 } = await persistWaypoint(A, { routeId, order: 2, title: "WP Two", goal: "Goal two" }));
+    // Executed action created FIRST (leads createdAt order → it + its outcome lead the neighborhood),
+    // proposed action SECOND (no outcome).
+    ({ actionId: executedActionId } = await upsertRouteAction(A, { waypointId: wp2, employeeRole: "cmo", type: "post", rationale: "ship it" }));
+    ({ actionId: proposedActionId } = await upsertRouteAction(A, { waypointId: wp2, employeeRole: "cto", type: "build", rationale: "later" }));
+
+    // Drive the executed action to a REAL verified send (asset channel=instagram → one outcome node).
+    const { assetId } = await persistAsset(A, { channel: "instagram", kind: "post", content: { caption: "hi" }, routeActionId: executedActionId });
+    await setActionAsset(A, executedActionId, assetId);
+    await approveAction(A, { routeActionId: executedActionId, principal: "founder" });
+    await startExecution(A, { routeActionId: executedActionId, runId: "run_ac_1" });
+    await completeExecution(A, { routeActionId: executedActionId });
+    await prisma.routeAction.update({ where: { id: executedActionId }, data: { verifiedAt: NOW, postedUrl: POSTED_URL } });
+
+    // Mirror once (the WRITE). buildAgentContext then only READS this graph.
+    await mirrorPlanToGraph(A, routeId, NOW);
+
+    // A SECOND route in the SAME business, never mirrored — the degrade-to-empty case. Its presence
+    // also proves route-scoping: the main route's mirror nodes must NOT leak into this route's read.
+    const { objectiveId: emptyObj } = await createObjective(A, { kind: "growth", target: "later", metric: "signups" });
+    ({ routeId: emptyRouteId } = await persistRoute(A, { objectiveId: emptyObj, source: "composed" }));
+    await persistWaypoint(A, { routeId: emptyRouteId, order: 1, title: "Unmirrored", goal: "No graph yet" });
+  });
+
+  it("reconstructs the ancestorPath in next-spine (RouteWaypoint.order) order, up to & incl. the anchor", async () => {
+    const ctx = await buildAgentContext(A, { routeId });
+    expect(ctx.ancestorPath).toHaveLength(2);
+    expect(ctx.ancestorPath[0]).toEqual({ title: "WP One", goal: "Goal one" });
+    expect(ctx.ancestorPath[1]).toEqual({ title: "WP Two", goal: "Goal two" });
+  });
+
+  it("neighborhood around the default (last) anchor includes its action node(s) AND the executed action's outcome", async () => {
+    const ctx = await buildAgentContext(A, { routeId });
+    const kinds = ctx.neighborhood.map((n) => n.kind);
+    expect(kinds).toContain("action");
+    expect(kinds).toContain("outcome"); // the executed+verified action's caused outcome is recalled
+    const outcome = ctx.neighborhood.find((n) => n.kind === "outcome");
+    expect(outcome?.title).toBe("went live on instagram");
+    expect(outcome?.detail).toBe(POSTED_URL);
+  });
+
+  it("text is a non-empty, bounded rendering that references the waypoint goals and marks the current anchor", async () => {
+    const ctx = await buildAgentContext(A, { routeId });
+    expect(ctx.text.length).toBeGreaterThan(0);
+    expect(ctx.text).toContain("Goal one");
+    expect(ctx.text).toContain("Goal two");
+    expect(ctx.text).toMatch(/current/i); // the anchor waypoint is marked "(current)"
+  });
+
+  it("maxItems is load-bearing: cap 1 yields ONE neighborhood item and a strictly shorter text than uncapped", async () => {
+    const capped = await buildAgentContext(A, { routeId }, { maxItems: 1 });
+    const uncapped = await buildAgentContext(A, { routeId }); // default 12
+    expect(capped.neighborhood).toHaveLength(1);
+    expect(uncapped.neighborhood.length).toBeGreaterThan(1); // action(s) + outcome
+    // The cap drops the outcome "Done:" line, so the rendered text is strictly shorter — the cap
+    // bounds BOTH the item list and the prompt text.
+    expect(capped.text.length).toBeLessThan(uncapped.text.length);
+  });
+
+  it("learnings is empty at 5b (no `learning` nodes yet) — forward-compatible", async () => {
+    const ctx = await buildAgentContext(A, { routeId, role: "cmo" });
+    expect(ctx.learnings).toEqual([]);
+  });
+
+  it("degrades to an all-empty context (no throw) for a route that exists but was never mirrored", async () => {
+    const ctx = await buildAgentContext(A, { routeId: emptyRouteId });
+    expect(ctx).toEqual({ ancestorPath: [], neighborhood: [], learnings: [], text: "" });
+  });
+
+  it("rejects a cross-tenant routeId (route not in the caller's business)", async () => {
+    await expect(buildAgentContext(B, { routeId })).rejects.toThrow(/not found|scope/i);
   });
 });

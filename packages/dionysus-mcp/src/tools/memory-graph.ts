@@ -1,4 +1,4 @@
-import { Prisma } from "@prisma/client";
+import { Prisma, type MemoryNode } from "@prisma/client";
 import { prisma } from "../db.js";
 import type { Identity } from "../identity.js";
 
@@ -146,4 +146,114 @@ export async function mirrorPlanToGraph(
   }
 
   return { waypointNodeIds, actionNodeIds, outcomeNodeIds, edgeCount };
+}
+
+/** The plan-anchored causal-recall read: the waypoint ancestor path + the anchor's action/outcome neighborhood + role-scoped learnings + a compact prompt rendering. */
+export type AgentContext = {
+  ancestorPath: Array<{ title: string; goal: string }>;                                 // waypoints head→anchor (incl.), in `next`-spine order
+  neighborhood: Array<{ kind: "action" | "outcome"; title: string; detail: string }>;   // the anchor waypoint's actions + their `caused` outcomes, capped
+  learnings: Array<{ title: string; body: string; confidence: number }>;                // role-scoped `learning` nodes (none at 5b — forward-compatible)
+  text: string;                                                                          // bounded prompt rendering (capped by maxItems)
+};
+
+/** Budget cap on the recalled neighborhood + learnings (and, via the neighborhood, the `text`). */
+const DEFAULT_MAX_ITEMS = 12;
+
+/**
+ * §Memory read = traversal. The plan-anchored CAUSAL-RECALL read behind an agent's "what's happened
+ * so far" context. It is PURE and businessId-SCOPED: it writes nothing and mirrors nothing
+ * (mirrorPlanToGraph is the sole writer — this only READS whatever graph already exists), and it is
+ * BUDGET-CAPPED so the recalled context stays bounded no matter how large the graph grows.
+ *
+ * Flow: scoped route load (a cross-tenant/unknown routeId is the ONLY throw). Reconstruct the
+ * waypoint ancestor path by ordering the route's waypoint mirror nodes on the SOURCE
+ * RouteWaypoint.order (join via sourceId → RouteWaypoint.id → .order — deterministic integer order,
+ * no createdAt ties; the same ordering getTimeline relies on). Anchor = the given waypointId's mirror
+ * node, else the LAST waypoint on the spine; ancestorPath = head→anchor inclusive. Neighborhood = the
+ * anchor waypoint's `action` nodes plus the `outcome` nodes they `caused` (edge traversal), capped at
+ * `maxItems`. `text` renders the path (anchor marked "(current)") + the capped "Done" facts, so
+ * maxItems bounds BOTH the item list and the prompt string. A sparse/empty graph (route exists but was
+ * never mirrored) degrades to an all-empty context — NO throw. `learnings` are role-scoped `learning`
+ * nodes; NONE exist at 5b (the belief layer lands in 5c), so this stays forward-compatible and empty.
+ */
+export async function buildAgentContext(
+  identity: Identity,
+  input: { routeId: string; waypointId?: string; role?: string },
+  opts?: { maxItems?: number },
+): Promise<AgentContext> {
+  const maxItems = opts?.maxItems ?? DEFAULT_MAX_ITEMS;
+  const empty: AgentContext = { ancestorPath: [], neighborhood: [], learnings: [], text: "" };
+
+  // Scoped route load — a cross-tenant/unknown routeId is a not-found (the ONLY throw path).
+  const route = await prisma.route.findFirst({ where: { id: input.routeId, businessId: identity.businessId } });
+  if (!route) throw new Error(`Route ${input.routeId} not found in this business scope.`);
+
+  // Waypoint spine, ordered by the SOURCE RouteWaypoint.order (deterministic; no createdAt ties).
+  // Join: each route waypoint (ordered) → its waypoint mirror node by (type "waypoint", sourceId=wp.id).
+  const waypoints = await prisma.routeWaypoint.findMany({
+    where: { routeId: input.routeId, businessId: identity.businessId }, orderBy: { order: "asc" } });
+  const wpNodes: MemoryNode[] = [];
+  for (const wp of waypoints) {
+    const node = await prisma.memoryNode.findFirst({
+      where: { businessId: identity.businessId, type: "waypoint", sourceId: wp.id } });
+    if (node) wpNodes.push(node);
+  }
+  // Degrade-to-empty: no mirror nodes yet (route never mirrored) → empty context, NO throw.
+  if (wpNodes.length === 0) return empty;
+
+  // Anchor = the given waypointId's mirror node, else the LAST waypoint on the spine.
+  let anchorIndex = wpNodes.length - 1;
+  if (input.waypointId) {
+    const found = wpNodes.findIndex((n) => n.waypointId === input.waypointId || n.sourceId === input.waypointId);
+    if (found !== -1) anchorIndex = found;
+  }
+  const anchor = wpNodes[anchorIndex];
+  if (!anchor) return empty; // unreachable (wpNodes is non-empty, anchorIndex is in range) — satisfies the type guard
+
+  // Ancestor path = head → anchor (inclusive), in spine order.
+  const ancestorPath = wpNodes.slice(0, anchorIndex + 1).map((n) => ({ title: n.title, goal: n.body }));
+
+  // Neighborhood = the anchor waypoint's `action` nodes + the `outcome` nodes they `caused`, capped
+  // at maxItems. Each action is immediately followed by its caused outcome(s) (recall of "what this
+  // action produced"). The cap can cut mid-action-group — that is intended: it hard-bounds the list.
+  const neighborhood: AgentContext["neighborhood"] = [];
+  if (anchor.waypointId) {
+    const actionNodes = await prisma.memoryNode.findMany({
+      where: { businessId: identity.businessId, type: "action", waypointId: anchor.waypointId },
+      orderBy: { createdAt: "asc" } });
+    for (const actionNode of actionNodes) {
+      if (neighborhood.length >= maxItems) break;
+      neighborhood.push({ kind: "action", title: actionNode.title, detail: actionNode.body });
+      // Traverse the `caused` edge (action → outcome) to recall the verified-live facts it produced.
+      const causedEdges = await prisma.memoryEdge.findMany({
+        where: { businessId: identity.businessId, fromId: actionNode.id, kind: "caused" } });
+      for (const edge of causedEdges) {
+        if (neighborhood.length >= maxItems) break;
+        const outcomeNode = await prisma.memoryNode.findFirst({
+          where: { id: edge.toId, businessId: identity.businessId } });
+        if (outcomeNode) neighborhood.push({ kind: "outcome", title: outcomeNode.title, detail: outcomeNode.body });
+      }
+    }
+  }
+
+  // Learnings = role-scoped `learning` nodes — NONE at 5b (the belief layer is 5c); bounded by maxItems.
+  const learningNodes = await prisma.memoryNode.findMany({
+    where: { businessId: identity.businessId, type: "learning", ...(input.role ? { role: input.role } : {}) },
+    orderBy: { confidence: "desc" }, take: maxItems });
+  const learnings = learningNodes.map((n) => ({ title: n.title, body: n.body, confidence: n.confidence }));
+
+  // Compact, bounded prompt rendering: the waypoint path (anchor marked "(current)") + the capped
+  // "Done" facts drawn from the neighborhood's outcome items (so maxItems bounds the text too).
+  const lines = ["Route so far:"];
+  ancestorPath.forEach((wp, i) => {
+    const marker = i === ancestorPath.length - 1 ? " (current)" : "";
+    lines.push(`- ${wp.title}${marker}: ${wp.goal}`);
+  });
+  for (const item of neighborhood) {
+    if (item.kind !== "outcome") continue;
+    lines.push(`Done: ${item.title}${item.detail ? ` — ${item.detail}` : ""}`);
+  }
+  const text = lines.join("\n");
+
+  return { ancestorPath, neighborhood, learnings, text };
 }
