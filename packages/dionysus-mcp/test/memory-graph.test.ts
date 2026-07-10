@@ -394,6 +394,8 @@ describe("buildAgentContext — plan-anchored causal recall (pure scoped read, b
   let executedActionId: string;
   let proposedActionId: string;
   let emptyRouteId: string;
+  let midRouteId: string;
+  let midWp2: string;
 
   beforeAll(async () => {
     for (const id of [A.businessId, B.businessId]) {
@@ -429,6 +431,19 @@ describe("buildAgentContext — plan-anchored causal recall (pure scoped read, b
     const { objectiveId: emptyObj } = await createObjective(A, { kind: "growth", target: "later", metric: "signups" });
     ({ routeId: emptyRouteId } = await persistRoute(A, { objectiveId: emptyObj, source: "composed" }));
     await persistWaypoint(A, { routeId: emptyRouteId, order: 1, title: "Unmirrored", goal: "No graph yet" });
+
+    // A THIRD route in business A with 3 ordered waypoints — the MID-SPINE waypointId-anchor case
+    // (Task 4's draftWaypoint passes an explicit in-route waypointId). Distinctive actions live on BOTH
+    // the mid waypoint (the anchor under test) and the last one, so the anchor's neighborhood can be
+    // proven to be the MID one's, not the (default) last's.
+    const { objectiveId: midObj } = await createObjective(A, { kind: "growth", target: "mid-spine", metric: "signups" });
+    ({ routeId: midRouteId } = await persistRoute(A, { objectiveId: midObj, source: "composed" }));
+    await persistWaypoint(A, { routeId: midRouteId, order: 1, title: "Mid WP One", goal: "Mid goal one" });
+    ({ waypointId: midWp2 } = await persistWaypoint(A, { routeId: midRouteId, order: 2, title: "Mid WP Two", goal: "Mid goal two" }));
+    const { waypointId: midWp3 } = await persistWaypoint(A, { routeId: midRouteId, order: 3, title: "Mid WP Three", goal: "Mid goal three" });
+    await upsertRouteAction(A, { waypointId: midWp2, employeeRole: "cmo", type: "post", rationale: "mid-anchor action" });
+    await upsertRouteAction(A, { waypointId: midWp3, employeeRole: "cto", type: "build", rationale: "last-wp action" });
+    await mirrorPlanToGraph(A, midRouteId, NOW);
   });
 
   it("reconstructs the ancestorPath in next-spine (RouteWaypoint.order) order, up to & incl. the anchor", async () => {
@@ -474,6 +489,27 @@ describe("buildAgentContext — plan-anchored causal recall (pure scoped read, b
   it("degrades to an all-empty context (no throw) for a route that exists but was never mirrored", async () => {
     const ctx = await buildAgentContext(A, { routeId: emptyRouteId });
     expect(ctx).toEqual({ ancestorPath: [], neighborhood: [], learnings: [], text: "" });
+  });
+
+  it("mid-spine waypointId anchor: truncates ancestorPath at the anchor and recalls THAT waypoint's neighborhood (not the last's)", async () => {
+    const ctx = await buildAgentContext(A, { routeId: midRouteId, waypointId: midWp2 });
+
+    // ancestorPath = head → anchor (WP2) inclusive = slice(0, anchorIndex+1) with anchorIndex 1 → length 2,
+    // in spine order (WP1 then WP2) — NOT the full 3. WP3 (after the anchor) is truncated away.
+    expect(ctx.ancestorPath).toHaveLength(2);
+    expect(ctx.ancestorPath[0]).toEqual({ title: "Mid WP One", goal: "Mid goal one" });
+    expect(ctx.ancestorPath[1]).toEqual({ title: "Mid WP Two", goal: "Mid goal two" });
+    expect(ctx.ancestorPath.map((w) => w.title)).not.toContain("Mid WP Three");
+
+    // The anchor (WP2) is the LAST / current entry — the "(current)" marker sits on WP2's line, and WP3
+    // is not rendered at all (it is past the anchor).
+    expect(ctx.text).toContain("Mid WP Two (current)");
+    expect(ctx.text).not.toContain("Mid WP Three");
+
+    // Neighborhood reflects the ANCHOR waypoint's action (mid), not the last waypoint's.
+    const details = ctx.neighborhood.map((n) => n.detail);
+    expect(details).toContain("mid-anchor action");
+    expect(details).not.toContain("last-wp action");
   });
 
   it("rejects a cross-tenant routeId (route not in the caller's business)", async () => {

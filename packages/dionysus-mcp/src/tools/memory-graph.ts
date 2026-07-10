@@ -206,6 +206,9 @@ export async function buildAgentContext(
   if (input.waypointId) {
     const found = wpNodes.findIndex((n) => n.waypointId === input.waypointId || n.sourceId === input.waypointId);
     if (found !== -1) anchorIndex = found;
+    // else: an unresolvable/foreign waypointId falls back to the last (current) waypoint (anchorIndex
+    // unchanged) — the caller (draftWaypoint) always passes a valid in-route id, so this is a defensive
+    // default, not an error path (deliberately no throw).
   }
   const anchor = wpNodes[anchorIndex];
   if (!anchor) return empty; // unreachable (wpNodes is non-empty, anchorIndex is in range) — satisfies the type guard
