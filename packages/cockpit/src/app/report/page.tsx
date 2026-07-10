@@ -1,5 +1,6 @@
 import { requireSession } from "../../lib/auth";
 import { getCmoReport, isRenderableHttpUrl } from "../../lib/review";
+import { ConnectSourceNotice } from "../connect-source-notice";
 
 export const dynamic = "force-dynamic";
 
@@ -7,7 +8,7 @@ export const dynamic = "force-dynamic";
 //   1. What ran            — verified sends this week (or nothing did).
 //   2. What moved the number — HONEST: analytics is not connected at 4f, so this
 //      leads with the measurement gap (the grader's headline) + the connect CTA,
-//      keyed on `report.analyticsConnected === false`. It never shows a fabricated
+//      keyed on `!report.analyticsConnected`. It never shows a fabricated
 //      metric movement or percentage.
 //   3. What changes next week — the grader's recommendation + the week's counts.
 // All model/founder text is rendered as React-escaped JSX children — no
@@ -64,7 +65,7 @@ export default async function ReportPage() {
 
       <section style={{ marginBottom: 24 }}>
         <h3>What moved the number</h3>
-        {analyticsConnected === false ? (
+        {!analyticsConnected ? (
           <div style={{ border: "1px dashed #999", borderRadius: 8, padding: 16, background: "#fafafa" }}>
             <span
               style={{
@@ -83,11 +84,7 @@ export default async function ReportPage() {
               Not yet measured
             </span>
             <p style={{ margin: "0 0 12px" }}>{verdict.headline}</p>
-            <p style={{ margin: "0 0 12px", color: "#666" }}>
-              Your number&rsquo;s source is not connected yet, so this report grades activity, not outcomes —
-              it will never claim your metric moved until a real source is connected.
-            </p>
-            <button type="button" disabled>Connect your number&rsquo;s source</button>
+            <ConnectSourceNotice />
           </div>
         ) : (
           // Stage-5 measured path: the grader supplies a real, measured sentence.

@@ -1,5 +1,6 @@
 import { requireSession } from "../lib/auth";
 import { getCmoReport } from "../lib/review";
+import { ConnectSourceNotice } from "./connect-source-notice";
 
 export const dynamic = "force-dynamic";
 
@@ -41,11 +42,7 @@ export default async function HomePage() {
 
       {!analyticsConnected && (
         <section style={{ border: "1px dashed #999", borderRadius: 8, padding: 16, marginBottom: 16 }}>
-          <p>
-            Your number&rsquo;s source is not connected yet, so this report grades activity, not outcomes —
-            it will never claim your metric moved until a real source is connected.
-          </p>
-          <button type="button" disabled>Connect your number&rsquo;s source</button>
+          <ConnectSourceNotice />
         </section>
       )}
 
