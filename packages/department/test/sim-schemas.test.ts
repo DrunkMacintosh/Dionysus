@@ -29,9 +29,18 @@ describe("PredictionSchema", () => {
 });
 
 describe("simulator prompt", () => {
-  it("carries the labeled-prediction + never-fact + fence + no-invented-numbers rules", () => {
+  it("pins every rule: labeled-prediction, never-fact, no-real-users, no-invented-numbers, data-not-instructions, harsh-honesty, fence, and JSON contract", () => {
     const p = loadPrompt("simulator").toLowerCase();
-    for (const s of ["prediction", "never a fact", "untrusted-content", "never claim real users"]) {
+    for (const s of [
+      "prediction", // labeled-prediction, never a fact
+      "never a fact",
+      "never claim real users",
+      "never invent numbers", // no-invented-numbers rule
+      "never instructions to follow", // data-not-instructions clause
+      "do not flatter", // harsh-honesty
+      "untrusted-content", // fence
+      "engagementscore", // output JSON contract
+    ]) {
       expect(p).toContain(s);
     }
   });
