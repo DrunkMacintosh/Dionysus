@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma } from "../src/db.js";
-import { persistCraftBelief } from "../src/tools/belief-graph.js";
+import { persistCraftBelief, deriveCraftBeliefs, listCraftBeliefs } from "../src/tools/belief-graph.js";
 import type { CraftBelief } from "../src/lib/belief.js";
+import { mirrorPlanToGraph } from "../src/tools/memory-graph.js";
+import { createObjective, persistRoute, persistWaypoint } from "../src/tools/plan.js";
 
 const BIZ = "biz-belief-a";
 const OTHER = "biz-belief-b";
@@ -22,6 +24,23 @@ async function resetBusinesses() {
 
 const positive: CraftBelief = { confidence: 0.7, stance: "positive", lowConfidence: false, summary: "Tends to approve (5 as-is, 0 rejected)." };
 const negative: CraftBelief = { confidence: 0.6, stance: "negative", lowConfidence: false, summary: "Tends to reject (0 as-is, 4 rejected)." };
+
+const NOW = new Date("2026-07-11T00:00:00.000Z");
+
+// Objective/Route/Waypoint via the REAL plan tools (correct required-field shapes); actions raw so
+// status/editDistance/featuresJson are set precisely for the acceptance evidence.
+async function seedRoute(businessId: string, actions: Array<{ role: string; features: object; status: string; editDistance: number | null }>) {
+  const id = { businessId };
+  const { objectiveId } = await createObjective(id, { kind: "growth", target: "100 signups", metric: "signups" });
+  const { routeId } = await persistRoute(id, { objectiveId, source: "composed" });
+  const { waypointId } = await persistWaypoint(id, { routeId, order: 1, title: "W1", goal: "ship" });
+  for (const a of actions) {
+    await prisma.routeAction.create({ data: {
+      businessId, waypointId, employeeRole: a.role, type: "post", status: a.status,
+      featuresJson: JSON.stringify(a.features), editDistance: a.editDistance } });
+  }
+  return { routeId, waypointId };
+}
 
 describe("persistCraftBelief", () => {
   beforeEach(resetBusinesses);
@@ -75,5 +94,95 @@ describe("persistCraftBelief", () => {
     const bNodes = await prisma.memoryNode.findMany({ where: { businessId: OTHER, type: "learning" } });
     expect(aNodes).toHaveLength(1);
     expect(bNodes).toHaveLength(1);
+  });
+});
+
+describe("deriveCraftBeliefs", () => {
+  beforeEach(resetBusinesses);
+
+  it("forms a positive belief when the founder approves a feature's drafts as-is", async () => {
+    const { routeId } = await seedRoute(BIZ, [
+      { role: "copywriter", features: { channel: "linkedin" }, status: "executed", editDistance: 0 },
+      { role: "copywriter", features: { channel: "linkedin" }, status: "approved", editDistance: 0 },
+      { role: "copywriter", features: { channel: "linkedin" }, status: "approved", editDistance: null },
+    ]);
+    await mirrorPlanToGraph({ businessId: BIZ }, routeId, NOW);
+    const { beliefNodeIds } = await deriveCraftBeliefs({ businessId: BIZ }, { routeId }, NOW);
+    expect(beliefNodeIds).toHaveLength(1);
+    const node = await prisma.memoryNode.findUnique({ where: { id: beliefNodeIds[0]! } });
+    expect(node?.stance).toBe("positive");
+    const informedBy = await prisma.memoryEdge.findMany({ where: { businessId: BIZ, fromId: beliefNodeIds[0]!, kind: "informed-by" } });
+    expect(informedBy.length).toBeGreaterThanOrEqual(1);
+    for (const e of informedBy) {
+      const target = await prisma.memoryNode.findUnique({ where: { id: e.toId } });
+      expect(target?.type).toBe("action");
+    }
+  });
+
+  it("flips a belief to negative when the acceptance signal reverses (drives supersede)", async () => {
+    const first = await seedRoute(BIZ, [
+      { role: "copywriter", features: { channel: "x" }, status: "approved", editDistance: 0 },
+      { role: "copywriter", features: { channel: "x" }, status: "approved", editDistance: 0 },
+      { role: "copywriter", features: { channel: "x" }, status: "executed", editDistance: 0 },
+    ]);
+    await mirrorPlanToGraph({ businessId: BIZ }, first.routeId, NOW);
+    const before = await deriveCraftBeliefs({ businessId: BIZ }, { routeId: first.routeId }, NOW);
+    expect((await prisma.memoryNode.findUnique({ where: { id: before.beliefNodeIds[0]! } }))?.stance).toBe("positive");
+
+    const second = await seedRoute(BIZ, [
+      { role: "copywriter", features: { channel: "x" }, status: "rejected", editDistance: null },
+      { role: "copywriter", features: { channel: "x" }, status: "rejected", editDistance: null },
+      { role: "copywriter", features: { channel: "x" }, status: "rejected", editDistance: null },
+    ]);
+    await mirrorPlanToGraph({ businessId: BIZ }, second.routeId, NOW);
+    const after = await deriveCraftBeliefs({ businessId: BIZ }, { routeId: second.routeId }, NOW);
+    expect(after.supersededCount).toBe(1);
+    expect((await prisma.memoryNode.findUnique({ where: { id: after.beliefNodeIds[0]! } }))?.stance).toBe("negative");
+  });
+
+  it("is idempotent on unchanged evidence — a second derive adds zero learning rows", async () => {
+    const { routeId } = await seedRoute(BIZ, [
+      { role: "copywriter", features: { channel: "linkedin" }, status: "approved", editDistance: 0 },
+      { role: "copywriter", features: { channel: "linkedin" }, status: "approved", editDistance: 0 },
+      { role: "copywriter", features: { channel: "linkedin" }, status: "approved", editDistance: 0 },
+    ]);
+    await mirrorPlanToGraph({ businessId: BIZ }, routeId, NOW);
+    await deriveCraftBeliefs({ businessId: BIZ }, { routeId }, NOW);
+    const countAfterFirst = await prisma.memoryNode.count({ where: { businessId: BIZ, type: "learning" } });
+    await deriveCraftBeliefs({ businessId: BIZ }, { routeId }, NOW);
+    const countAfterSecond = await prisma.memoryNode.count({ where: { businessId: BIZ, type: "learning" } });
+    expect(countAfterSecond).toBe(countAfterFirst);
+  });
+
+  it("skips actions with no whitelisted feature tags (empty key → no belief)", async () => {
+    const { routeId } = await seedRoute(BIZ, [
+      { role: "copywriter", features: { radar: true }, status: "approved", editDistance: 0 },
+    ]);
+    await mirrorPlanToGraph({ businessId: BIZ }, routeId, NOW);
+    const { beliefNodeIds } = await deriveCraftBeliefs({ businessId: BIZ }, { routeId }, NOW);
+    expect(beliefNodeIds).toHaveLength(0);
+  });
+
+  it("throws on a cross-tenant routeId before any write", async () => {
+    const { routeId } = await seedRoute(OTHER, [
+      { role: "copywriter", features: { channel: "linkedin" }, status: "approved", editDistance: 0 },
+    ]);
+    await expect(deriveCraftBeliefs({ businessId: BIZ }, { routeId }, NOW)).rejects.toThrow(/not found/i);
+    expect(await prisma.memoryNode.count({ where: { businessId: BIZ, type: "learning" } })).toBe(0);
+  });
+});
+
+describe("listCraftBeliefs", () => {
+  beforeEach(resetBusinesses);
+
+  it("returns live beliefs ordered by confidence, excluding superseded snapshots", async () => {
+    await persistCraftBelief({ businessId: BIZ }, { role: "copywriter", featureKey: "channel=linkedin", belief: positive });
+    await persistCraftBelief({ businessId: BIZ }, { role: "copywriter", featureKey: "channel=linkedin", belief: negative }); // flips → snapshot
+    await persistCraftBelief({ businessId: BIZ }, { role: "copywriter", featureKey: "channel=x", belief: { confidence: 0.9, stance: "positive", lowConfidence: false, summary: "strong" } });
+
+    const beliefs = await listCraftBeliefs({ businessId: BIZ });
+    expect(beliefs).toHaveLength(2);
+    expect(beliefs[0]?.confidence).toBeGreaterThanOrEqual(beliefs[1]?.confidence ?? 0);
+    expect(beliefs.some((b) => b.title.includes("superseded"))).toBe(false);
   });
 });
