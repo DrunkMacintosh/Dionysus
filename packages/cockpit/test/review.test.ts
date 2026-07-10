@@ -3,7 +3,7 @@ import { prisma } from "dionysus-mcp/db";
 import { persistAsset, setActionAsset } from "dionysus-mcp/tools/asset";
 import { recordSimulation } from "dionysus-mcp/tools/simulation";
 import { recordObservation } from "dionysus-mcp/tools/memory";
-import { listProposedDrafts, getRouteOverview, getDigestHeader, listSendQueue, listExecuted, isRenderableHttpUrl, listRadarObservations } from "../src/lib/review";
+import { listProposedDrafts, getRouteOverview, getDigestHeader, listSendQueue, listExecuted, isRenderableHttpUrl, listRadarObservations, getCmoReport } from "../src/lib/review";
 
 const A = { businessId: "biz_cockpit_rev" };
 const B = { businessId: "biz_cockpit_rev_other" };
@@ -204,6 +204,55 @@ describe("radar surface service (listRadarObservations)", () => {
 
   it("another tenant sees no observations (identity-scoped reads)", async () => {
     expect(await listRadarObservations(RADO)).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CMO report service (getCmoReport) — the read behind the progress-to-objective
+// home. A thin request-boundary wrapper over buildCmoReport that stamps the real
+// clock (new Date()). The honesty invariant (§3/D21/D31) surfaces here: at 4f
+// analyticsConnected is always false and NO verdict ever claims the metric moved.
+// ---------------------------------------------------------------------------
+const CMO = { businessId: "biz_cockpit_cmo" };
+const CMOO = { businessId: "biz_cockpit_cmo_other" };
+
+describe("cmo report service (getCmoReport)", () => {
+  beforeAll(async () => {
+    for (const id of [CMO.businessId, CMOO.businessId]) {
+      await prisma.asset.deleteMany({ where: { businessId: id } });
+      await prisma.routeAction.deleteMany({ where: { businessId: id } });
+      await prisma.routeWaypoint.deleteMany({ where: { businessId: id } });
+      await prisma.route.deleteMany({ where: { businessId: id } });
+      await prisma.objective.deleteMany({ where: { businessId: id } });
+      await prisma.business.upsert({ where: { id }, create: { id, name: id }, update: {} });
+    }
+    const obj = await prisma.objective.create({ data: { businessId: CMO.businessId, kind: "growth", target: "500", metric: "signups", status: "active" } });
+    const route = await prisma.route.create({ data: { businessId: CMO.businessId, objectiveId: obj.id, source: "case", status: "active" } });
+    const wp = await prisma.routeWaypoint.create({ data: { businessId: CMO.businessId, routeId: route.id, order: 1, title: "Launch", goal: "go live", status: "active" } });
+    // Assets bind only while "proposed" (setActionAsset's bind-guard): bind first,
+    // then move the action to executed+verified so it shows up in whatRan this week.
+    const action = await prisma.routeAction.create({ data: { businessId: CMO.businessId, waypointId: wp.id, employeeRole: "copywriter", type: "post", status: "proposed" } });
+    const { assetId } = await persistAsset(CMO, { channel: "hackernews", kind: "post", content: { title: "Show HN", body: "shipped" }, routeActionId: action.id });
+    await setActionAsset(CMO, action.id, assetId);
+    await prisma.routeAction.update({ where: { id: action.id }, data: { status: "executed", postedUrl: "https://example.com/live", verifiedAt: new Date(), outcome: "verified" } });
+  });
+
+  it("returns a CmoReport for a tenant with an executed send; honesty holds (analytics off, no metric-move claim)", async () => {
+    const report = await getCmoReport(CMO);
+    expect(report.objective).not.toBeNull();
+    expect(report.objective!.metric).toBe("signups");
+    expect(report.whatRan).toHaveLength(1); // the in-week verified send
+    expect(report.whatRan[0]!.title).toBe("Show HN");
+    expect(report.analyticsConnected).toBe(false);
+    expect(report.verdict.claimsMetricMoved).toBe(false); // §3/D21 invariant
+  });
+
+  it("a tenant with no route gets objective null + a getting-started verdict", async () => {
+    const report = await getCmoReport(CMOO);
+    expect(report.objective).toBeNull();
+    expect(report.verdict.state).toBe("getting-started");
+    expect(report.verdict.claimsMetricMoved).toBe(false);
+    expect(report.analyticsConnected).toBe(false);
   });
 });
 

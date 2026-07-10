@@ -2,6 +2,20 @@ import { prisma } from "dionysus-mcp/db";
 import type { Identity } from "dionysus-mcp/identity";
 import { buildDailyDigest } from "dionysus-mcp/tools/digest";
 import { listObservations } from "dionysus-mcp/tools/memory";
+import { buildCmoReport, type CmoReport } from "dionysus-mcp/tools/cmo-report";
+
+export type { CmoReport };
+
+// ---------------------------------------------------------------------------
+// CMO report (Task 3) — the read behind the progress-to-objective home. This is
+// the request-boundary wrapper where the REAL clock enters: buildCmoReport (the
+// pure grader + assembly) stays clock-injected and is tested with a fixed `now`,
+// while getCmoReport stamps `new Date()` exactly once, here. Identity-scoped like
+// the other cockpit reads; NOT an MCP tool (the whitelist stays 11).
+// ---------------------------------------------------------------------------
+export async function getCmoReport(identity: Identity): Promise<CmoReport> {
+  return buildCmoReport({ businessId: identity.businessId }, new Date());
+}
 
 export type DraftCard = {
   actionId: string; employeeRole: string; type: string;
