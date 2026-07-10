@@ -334,4 +334,50 @@ describe("mirrorPlanToGraph — outcome mirror (executed→outcome node + caused
     expect(nodeCountAfter).toBe(nodeCountBefore); // no duplicate outcome node
     expect(edgeCountAfter).toBe(edgeCountBefore); // no duplicate caused edge
   });
+
+  it("creates NO outcome node for an EXECUTED-but-UNVERIFIED action (locks the verifiedAt half of the gate)", async () => {
+    // Drive a fresh action through the REAL lifecycle all the way to "executed" but leave
+    // verifiedAt null (completeExecution does NOT set it). The status half of the honesty gate
+    // now passes; the verifiedAt half must INDEPENDENTLY block the outcome node. Mutation
+    // intuition: drop `&& action.verifiedAt` from the gate and this test goes RED — an
+    // executed-but-unverified send would wrongly earn an outcome node claiming it went live.
+    const { actionId: unverifiedActionId } = await upsertRouteAction(C, { waypointId: wpId, employeeRole: "cmo", type: "post", rationale: "executed, not yet verified" });
+    const { assetId } = await persistAsset(C, { channel: "instagram", kind: "post", content: { caption: "pending" }, routeActionId: unverifiedActionId });
+    await setActionAsset(C, unverifiedActionId, assetId);
+    await approveAction(C, { routeActionId: unverifiedActionId, principal: "founder" });
+    await startExecution(C, { routeActionId: unverifiedActionId, runId: "run_unverified" });
+    await completeExecution(C, { routeActionId: unverifiedActionId });
+    // NB: verifiedAt intentionally left null — the send has NOT been verified live.
+
+    const result = await mirrorPlanToGraph(C, routeId, NOW);
+
+    // No outcome node is keyed to this executed-but-unverified action (type disambiguates from its action node).
+    const outcome = await prisma.memoryNode.findFirst({ where: { businessId: C.businessId, type: "outcome", sourceId: unverifiedActionId } });
+    expect(outcome).toBeNull();
+    // ...and the mirror result surfaces no outcome node for it either.
+    const outcomeNodes = await Promise.all(result.outcomeNodeIds.map((id) => prisma.memoryNode.findUnique({ where: { id } })));
+    expect(outcomeNodes.some((n) => n?.sourceId === unverifiedActionId)).toBe(false);
+  });
+
+  it("titles the outcome with the action type when the executed+verified action has no bound asset (channel fallback)", async () => {
+    // Path B: approveAction requires a bound asset for the content-hash check, so an asset-less
+    // action cannot be driven through the lifecycle. Instead bind an asset, execute + verify,
+    // then null out assetId BEFORE mirroring so the outcome channel resolves via the fallback
+    // (action.type) rather than a bound asset's channel.
+    const { actionId: fallbackActionId } = await upsertRouteAction(C, { waypointId: wpId, employeeRole: "cmo", type: "email", rationale: "verified, asset detached" });
+    const { assetId } = await persistAsset(C, { channel: "instagram", kind: "post", content: { caption: "live" }, routeActionId: fallbackActionId });
+    await setActionAsset(C, fallbackActionId, assetId);
+    await approveAction(C, { routeActionId: fallbackActionId, principal: "founder" });
+    await startExecution(C, { routeActionId: fallbackActionId, runId: "run_fallback" });
+    await completeExecution(C, { routeActionId: fallbackActionId });
+    // The verified-live fact, and detach the asset so channel must fall back to action.type ("email"), not "instagram".
+    await prisma.routeAction.update({ where: { id: fallbackActionId }, data: { verifiedAt: NOW, postedUrl: POSTED_URL, assetId: null } });
+
+    await mirrorPlanToGraph(C, routeId, NOW);
+
+    const outcome = await prisma.memoryNode.findFirst({ where: { businessId: C.businessId, type: "outcome", sourceId: fallbackActionId } });
+    expect(outcome).not.toBeNull();
+    expect(outcome?.title).toBe("went live on email"); // fallback to action.type when no bound asset resolves
+    expect(outcome?.body).toBe(POSTED_URL); // still the verified-live URL, not a fabricated metric
+  });
 });
