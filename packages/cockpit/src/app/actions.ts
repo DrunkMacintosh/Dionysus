@@ -1,35 +1,38 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { approveAction, rejectAction } from "dionysus-mcp/tools/lifecycle";
 import { requireSession } from "../lib/auth";
+import {
+  approveDraftCore, rejectDraftCore, editDraftCore, markReviewedCore,
+  type ActionResult,
+} from "../lib/review-actions";
 
-export type ActionResult = { ok: boolean; message: string };
+export type { ActionResult } from "../lib/review-actions";
 
-function friendly(error: unknown): string {
-  return error instanceof Error ? error.message : "Something went wrong.";
-}
-
-export async function approveDraft(routeActionId: string): Promise<ActionResult> {
-  const session = await requireSession();
-  try {
-    await approveAction({ businessId: session.businessId }, { routeActionId, principal: session.email });
+function refresh(result: ActionResult): ActionResult {
+  if (result.ok) {
     revalidatePath("/drafts");
     revalidatePath("/");
-    return { ok: true, message: "Approved." };
-  } catch (error: unknown) {
-    return { ok: false, message: friendly(error) };
   }
+  return result;
 }
 
-export async function rejectDraft(routeActionId: string): Promise<ActionResult> {
+export async function approveDraft(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
   const session = await requireSession();
-  try {
-    await rejectAction({ businessId: session.businessId }, { routeActionId });
-    revalidatePath("/drafts");
-    revalidatePath("/");
-    return { ok: true, message: "Rejected." };
-  } catch (error: unknown) {
-    return { ok: false, message: friendly(error) };
-  }
+  return refresh(await approveDraftCore(session, String(formData.get("routeActionId") ?? "")));
+}
+
+export async function rejectDraft(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const session = await requireSession();
+  return refresh(await rejectDraftCore(session, String(formData.get("routeActionId") ?? "")));
+}
+
+export async function editDraft(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const session = await requireSession();
+  return refresh(await editDraftCore(session, String(formData.get("routeActionId") ?? ""), String(formData.get("newBody") ?? "")));
+}
+
+export async function markReviewed(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const session = await requireSession();
+  return refresh(await markReviewedCore(session, String(formData.get("digestId") ?? "")));
 }

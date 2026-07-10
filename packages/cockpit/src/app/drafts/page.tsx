@@ -17,10 +17,12 @@ export default async function DraftsPage() {
           {d.title ? <h3>{d.title}</h3> : null}
           <p style={{ whiteSpace: "pre-wrap" }}>{d.body}</p>
           {d.rationale ? <p style={{ color: "#666" }}>Why: {d.rationale}</p> : null}
-          <form action={async () => { "use server"; await approveDraft(d.actionId); }} style={{ display: "inline" }}>
+          <form action={async (fd: FormData) => { "use server"; await approveDraft(null, fd); }} style={{ display: "inline" }}>
+            <input type="hidden" name="routeActionId" value={d.actionId} />
             <button type="submit">Approve</button>
           </form>{" "}
-          <form action={async () => { "use server"; await rejectDraft(d.actionId); }} style={{ display: "inline" }}>
+          <form action={async (fd: FormData) => { "use server"; await rejectDraft(null, fd); }} style={{ display: "inline" }}>
+            <input type="hidden" name="routeActionId" value={d.actionId} />
             <button type="submit">Reject</button>
           </form>
         </article>
