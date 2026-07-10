@@ -27,6 +27,7 @@ model Business {
   digests         Digest[]
   simulations     SimulationResult[]
   memoryNodes     MemoryNode[]
+  memoryEdges     MemoryEdge[]
 }
 
 model Product {
@@ -239,7 +240,20 @@ model MemoryNode {
   body       String
   confidence Float
   sourceUrl  String?
+  sourceId   String?
   tainted    Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@index([businessId])
+}
+
+model MemoryEdge {
+  id         String   @id @default(cuid())
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id])
+  fromId     String
+  toId       String
+  kind       String   // next|caused|informed-by|supersedes|references
   createdAt  DateTime @default(now())
 
   @@index([businessId])
