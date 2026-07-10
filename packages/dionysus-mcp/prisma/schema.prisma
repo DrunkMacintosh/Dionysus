@@ -25,6 +25,7 @@ model Business {
   assets          Asset[]
   magicLinks      MagicLink[]
   digests         Digest[]
+  simulations     SimulationResult[]
 }
 
 model Product {
@@ -206,6 +207,19 @@ model MagicLink {
   expiresAt  DateTime
   usedAt     DateTime?
   createdAt  DateTime  @default(now())
+
+  @@index([businessId])
+}
+
+model SimulationResult {
+  id             String   @id @default(cuid())
+  businessId     String
+  business       Business @relation(fields: [businessId], references: [id])
+  routeActionId  String
+  engine         String   // "focus_group" | "mirofish"
+  predictionJson String
+  confidence     Float
+  createdAt      DateTime @default(now())
 
   @@index([businessId])
 }
