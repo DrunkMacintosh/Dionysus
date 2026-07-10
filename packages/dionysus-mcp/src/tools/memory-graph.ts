@@ -36,3 +36,65 @@ export async function persistMemoryEdge(identity: Identity, input: MemoryEdgeInp
     businessId: identity.businessId, fromId: input.fromId, toId: input.toId, kind: input.kind } });
   return { edgeId: row.id };
 }
+
+/** Find-or-create a mirror node keyed by (businessId, type, sourceId) — the idempotency primitive for the plan mirror. */
+async function findOrCreateMirrorNode(identity: Identity, input: MemoryNodeInput & { sourceId: string }): Promise<string> {
+  const existing = await prisma.memoryNode.findFirst({
+    where: { businessId: identity.businessId, type: input.type, sourceId: input.sourceId } });
+  if (existing) return existing.id;
+  const { nodeId } = await persistMemoryNode(identity, input);
+  return nodeId;
+}
+
+/**
+ * §13 anchored-to-the-plan: mirror the STRUCTURED plan into the evolution graph — one `waypoint`
+ * node per RouteWaypoint and one `action` node per RouteAction, wired by a `next` spine along the
+ * ordered waypoints and `references` edges from each action node to its waypoint node.
+ * Idempotent / lazy-on-view safe: each mirror node is found-or-created by (businessId, type,
+ * sourceId=the RouteWaypoint/RouteAction id), so re-calls return the SAME ids and add ZERO rows;
+ * edges dedup inside persistMemoryEdge. Mirror nodes are TRUSTED (tainted:false — persistMemoryNode
+ * default) since they reflect our own server-set plan, not ingested content. `now` is accepted for
+ * signature consistency (5a does not window on it; retained for the 5b learning loop).
+ */
+export async function mirrorPlanToGraph(
+  identity: Identity, routeId: string, _now: Date,
+): Promise<{ waypointNodeIds: string[]; actionNodeIds: string[]; edgeCount: number }> {
+  const route = await prisma.route.findFirst({ where: { id: routeId, businessId: identity.businessId } });
+  if (!route) throw new Error(`Route ${routeId} not found in this business scope.`);
+
+  const waypoints = await prisma.routeWaypoint.findMany({
+    where: { routeId, businessId: identity.businessId }, orderBy: { order: "asc" } });
+
+  const waypointNodeIds: string[] = [];
+  const actionNodeIds: string[] = [];
+  let edgeCount = 0;
+  let prevWaypointNodeId: string | undefined; // for the `next` spine along consecutive waypoints
+
+  for (const wp of waypoints) {
+    // Waypoint mirror node (collected in `order`).
+    const wpNodeId = await findOrCreateMirrorNode(identity, {
+      type: "waypoint", title: wp.title, body: wp.goal, confidence: 1, waypointId: wp.id, sourceId: wp.id });
+    waypointNodeIds.push(wpNodeId);
+
+    // `next` edge from the previous waypoint node to this one (deduped in persistMemoryEdge).
+    if (prevWaypointNodeId !== undefined) {
+      await persistMemoryEdge(identity, { fromId: prevWaypointNodeId, toId: wpNodeId, kind: "next" });
+      edgeCount++;
+    }
+    prevWaypointNodeId = wpNodeId;
+
+    // Action mirror nodes for this waypoint + a `references` edge from each to its waypoint node.
+    const actions = await prisma.routeAction.findMany({
+      where: { waypointId: wp.id, businessId: identity.businessId }, orderBy: { createdAt: "asc" } });
+    for (const action of actions) {
+      const nodeId = await findOrCreateMirrorNode(identity, {
+        type: "action", title: `${action.employeeRole}/${action.type}`, body: action.rationale ?? "",
+        confidence: 1, waypointId: wp.id, sourceId: action.id });
+      actionNodeIds.push(nodeId);
+      await persistMemoryEdge(identity, { fromId: nodeId, toId: wpNodeId, kind: "references" });
+      edgeCount++;
+    }
+  }
+
+  return { waypointNodeIds, actionNodeIds, edgeCount };
+}
