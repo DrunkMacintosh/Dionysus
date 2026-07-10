@@ -72,16 +72,22 @@ async function findOrCreateMirrorNode(identity: Identity, input: MemoryNodeInput
 /**
  * §13 anchored-to-the-plan: mirror the STRUCTURED plan into the evolution graph — one `waypoint`
  * node per RouteWaypoint and one `action` node per RouteAction, wired by a `next` spine along the
- * ordered waypoints and `references` edges from each action node to its waypoint node.
+ * ordered waypoints and `references` edges from each action node to its waypoint node. Each action
+ * that has ACTUALLY GONE LIVE (status "executed" AND verifiedAt set — a real verified send) also
+ * gets one `outcome` node + a `caused` edge (action node → outcome node). The outcome records the
+ * VERIFIED-LIVE FACT only — title `went live on {channel}` (channel from the bound asset, else the
+ * action type), body = the live postedUrl — it does NOT claim a metric moved (measured outcomes
+ * need analytics — 5c). Proposed/approved/executing actions get NO outcome node.
  * Idempotent / lazy-on-view safe: each mirror node is found-or-created by (businessId, type,
- * sourceId=the RouteWaypoint/RouteAction id), so re-calls return the SAME ids and add ZERO rows;
- * edges dedup inside persistMemoryEdge. Mirror nodes are TRUSTED (tainted:false — persistMemoryNode
- * default) since they reflect our own server-set plan, not ingested content. `now` is accepted for
- * signature consistency (5a does not window on it; retained for the 5b learning loop).
+ * sourceId=the RouteWaypoint/RouteAction id) — `type` disambiguates the outcome node from the
+ * action node (same sourceId) — so re-calls return the SAME ids and add ZERO rows; edges dedup
+ * inside persistMemoryEdge. Mirror nodes are TRUSTED (tainted:false — persistMemoryNode default)
+ * since they reflect our own server-set plan and verified-send facts, not ingested content. `now`
+ * is accepted for signature consistency (5a does not window on it; retained for the 5b learning loop).
  */
 export async function mirrorPlanToGraph(
   identity: Identity, routeId: string, _now: Date,
-): Promise<{ waypointNodeIds: string[]; actionNodeIds: string[]; edgeCount: number }> {
+): Promise<{ waypointNodeIds: string[]; actionNodeIds: string[]; outcomeNodeIds: string[]; edgeCount: number }> {
   const route = await prisma.route.findFirst({ where: { id: routeId, businessId: identity.businessId } });
   if (!route) throw new Error(`Route ${routeId} not found in this business scope.`);
 
@@ -90,6 +96,7 @@ export async function mirrorPlanToGraph(
 
   const waypointNodeIds: string[] = [];
   const actionNodeIds: string[] = [];
+  const outcomeNodeIds: string[] = [];
   let edgeCount = 0;
   let prevWaypointNodeId: string | undefined; // for the `next` spine along consecutive waypoints
 
@@ -116,8 +123,27 @@ export async function mirrorPlanToGraph(
       actionNodeIds.push(nodeId);
       await persistMemoryEdge(identity, { fromId: nodeId, toId: wpNodeId, kind: "references" });
       edgeCount++;
+
+      // §13 honesty gate: an `outcome` node is created ONLY for a REAL verified send —
+      // status "executed" AND verifiedAt set. It carries the VERIFIED-LIVE FACT (channel + live URL),
+      // NOT a fabricated metric (measured outcomes need analytics — 5c). Idempotent by (businessId,
+      // type:"outcome", sourceId=action.id); `type` disambiguates it from the action node above.
+      if (action.status === "executed" && action.verifiedAt) {
+        let channel = action.type; // fall back to the action type when there is no bound asset
+        if (action.assetId) {
+          const asset = await prisma.asset.findFirst({
+            where: { id: action.assetId, businessId: identity.businessId } });
+          if (asset) channel = asset.channel;
+        }
+        const outcomeNodeId = await findOrCreateMirrorNode(identity, {
+          type: "outcome", title: `went live on ${channel}`, body: action.postedUrl ?? "",
+          confidence: 1, waypointId: wp.id, sourceId: action.id });
+        outcomeNodeIds.push(outcomeNodeId);
+        await persistMemoryEdge(identity, { fromId: nodeId, toId: outcomeNodeId, kind: "caused" });
+        edgeCount++;
+      }
     }
   }
 
-  return { waypointNodeIds, actionNodeIds, edgeCount };
+  return { waypointNodeIds, actionNodeIds, outcomeNodeIds, edgeCount };
 }

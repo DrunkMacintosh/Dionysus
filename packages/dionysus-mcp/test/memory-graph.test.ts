@@ -3,6 +3,8 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../src/db.js";
 import { persistMemoryNode, persistMemoryEdge, mirrorPlanToGraph } from "../src/tools/memory-graph.js";
 import { createObjective, persistRoute, persistWaypoint, upsertRouteAction } from "../src/tools/plan.js";
+import { persistAsset, setActionAsset } from "../src/tools/asset.js";
+import { approveAction, startExecution, completeExecution } from "../src/tools/lifecycle.js";
 
 const BIZ = "biz_memgraph";
 
@@ -245,5 +247,91 @@ describe("graph writers are concurrency-safe (5a precondition)", () => {
     const n1 = await prisma.memoryNode.create({ data: { businessId: B, type: "market-observation", title: "o1", body: "b", confidence: 0.5 } });
     const n2 = await prisma.memoryNode.create({ data: { businessId: B, type: "market-observation", title: "o2", body: "b", confidence: 0.5 } });
     expect(n1.id).not.toBe(n2.id);
+  });
+});
+
+describe("mirrorPlanToGraph — outcome mirror (executed→outcome node + caused edge, honesty-scoped)", () => {
+  const C = { businessId: "biz_mirror_outcome" };
+  const NOW = new Date("2026-07-10T12:00:00.000Z");
+  const POSTED_URL = "https://instagram.com/p/verified123";
+
+  let routeId: string;
+  let wpId: string;
+  let executedActionId: string;
+  let proposedActionId: string;
+  let mirror: Awaited<ReturnType<typeof mirrorPlanToGraph>>;
+
+  beforeAll(async () => {
+    await prisma.business.upsert({ where: { id: C.businessId }, create: { id: C.businessId, name: C.businessId }, update: {} });
+    await prisma.memoryEdge.deleteMany({ where: { businessId: C.businessId } });
+    await prisma.memoryNode.deleteMany({ where: { businessId: C.businessId } });
+
+    // Seed a route + waypoint + 2 actions on the same waypoint.
+    const { objectiveId } = await createObjective(C, { kind: "growth", target: "1k signups", metric: "signups" });
+    ({ routeId } = await persistRoute(C, { objectiveId, source: "composed" }));
+    ({ waypointId: wpId } = await persistWaypoint(C, { routeId, order: 1, title: "WP One", goal: "Goal one" }));
+    ({ actionId: executedActionId } = await upsertRouteAction(C, { waypointId: wpId, employeeRole: "cmo", type: "post", rationale: "ship it" }));
+    ({ actionId: proposedActionId } = await upsertRouteAction(C, { waypointId: wpId, employeeRole: "cto", type: "build", rationale: "later" }));
+
+    // Bind a real asset (channel=instagram), then drive ONE action through the REAL lifecycle to executed.
+    const { assetId } = await persistAsset(C, { channel: "instagram", kind: "post", content: { caption: "hi" }, routeActionId: executedActionId });
+    await setActionAsset(C, executedActionId, assetId);
+    await approveAction(C, { routeActionId: executedActionId, principal: "founder" });
+    await startExecution(C, { routeActionId: executedActionId, runId: "run_1" });
+    await completeExecution(C, { routeActionId: executedActionId });
+    // The verified-send fact: a real live URL + verification timestamp (what makes an outcome node honest).
+    await prisma.routeAction.update({ where: { id: executedActionId }, data: { verifiedAt: NOW, postedUrl: POSTED_URL } });
+    // proposedActionId is left in "proposed" — it must NOT get an outcome node.
+
+    mirror = await mirrorPlanToGraph(C, routeId, NOW);
+  });
+
+  it("creates an outcome node ONLY for the executed+verified action (honesty gate)", async () => {
+    expect(mirror.outcomeNodeIds).toHaveLength(1);
+    const node = await prisma.memoryNode.findUnique({ where: { id: mirror.outcomeNodeIds[0] } });
+    expect(node?.type).toBe("outcome");
+    expect(node?.sourceId).toBe(executedActionId); // keyed to the action, disambiguated from the action node by type
+    expect(node?.businessId).toBe(C.businessId);
+    expect(node?.confidence).toBe(1);
+  });
+
+  it("titles the outcome with the bound asset channel and carries the postedUrl as body — a verified-live FACT, not a metric", async () => {
+    const node = await prisma.memoryNode.findUnique({ where: { id: mirror.outcomeNodeIds[0] } });
+    expect(node?.title).toBe("went live on instagram"); // channel resolved from the bound asset
+    expect(node?.body).toBe(POSTED_URL); // the live URL, NOT a measured number
+    // honesty: the body invents no metric (no percent, engagement, or impression count)
+    expect(node?.body).not.toMatch(/\d+\s*%|\bengagement\b|\bimpressions\b|\bclicks\b/i);
+  });
+
+  it("marks the outcome node TRUSTED (tainted:false — it mirrors our own verified send, not ingested content)", async () => {
+    const node = await prisma.memoryNode.findUnique({ where: { id: mirror.outcomeNodeIds[0] } });
+    expect(node?.tainted).toBe(false);
+  });
+
+  it("wires a `caused` edge from the action node to the outcome node", async () => {
+    const actionNode = await prisma.memoryNode.findFirst({ where: { businessId: C.businessId, type: "action", sourceId: executedActionId } });
+    expect(actionNode).not.toBeNull();
+    const edge = await prisma.memoryEdge.findFirst({
+      where: { businessId: C.businessId, fromId: actionNode!.id, toId: mirror.outcomeNodeIds[0], kind: "caused" },
+    });
+    expect(edge).not.toBeNull();
+  });
+
+  it("creates NO outcome node for the proposed (non-executed) action", async () => {
+    const outcomeForProposed = await prisma.memoryNode.findFirst({ where: { businessId: C.businessId, type: "outcome", sourceId: proposedActionId } });
+    expect(outcomeForProposed).toBeNull();
+  });
+
+  it("is idempotent: re-run yields the SAME outcomeNodeIds and adds ZERO rows", async () => {
+    const nodeCountBefore = await prisma.memoryNode.count({ where: { businessId: C.businessId } });
+    const edgeCountBefore = await prisma.memoryEdge.count({ where: { businessId: C.businessId } });
+
+    const again = await mirrorPlanToGraph(C, routeId, NOW);
+    expect(again.outcomeNodeIds).toEqual(mirror.outcomeNodeIds);
+
+    const nodeCountAfter = await prisma.memoryNode.count({ where: { businessId: C.businessId } });
+    const edgeCountAfter = await prisma.memoryEdge.count({ where: { businessId: C.businessId } });
+    expect(nodeCountAfter).toBe(nodeCountBefore); // no duplicate outcome node
+    expect(edgeCountAfter).toBe(edgeCountBefore); // no duplicate caused edge
   });
 });
