@@ -7,13 +7,19 @@ const base: ObjectiveStats = {
 };
 
 describe("gradeObjective (honesty engine)", () => {
-  it("getting-started when nothing has ever shipped", () => {
+  it("getting-started when nothing has ever shipped — headline leads with the truth (nothing live)", () => {
     const v = gradeObjective({ ...base, executedTotal: 0 });
     expect(v.state).toBe("getting-started");
     expect(v.claimsMetricMoved).toBe(false);
+    expect(v.headline.toLowerCase()).toMatch(/nothing/);
   });
-  it("getting-started when too few weeks to judge", () => {
-    expect(gradeObjective({ ...base, weeksActive: MIN_WEEKS_TO_JUDGE - 1 }).state).toBe("getting-started");
+  it("getting-started when too few weeks to judge but work HAS shipped — headline must not falsely say nothing is live", () => {
+    const v = gradeObjective({ ...base, weeksActive: MIN_WEEKS_TO_JUDGE - 1 }); // executedTotal: 5
+    expect(v.state).toBe("getting-started");
+    expect(v.claimsMetricMoved).toBe(false);
+    // too-new-but-shipped: leads with the truth, never the false "nothing has gone live yet"
+    expect(v.headline.toLowerCase()).not.toMatch(/nothing/);
+    expect(v.headline.toLowerCase()).toMatch(/5|early/);
   });
   it("shipping-unmeasured when work is live but no analytics — leads with the gap, claims nothing", () => {
     const v = gradeObjective(base);
@@ -38,17 +44,26 @@ describe("gradeObjective (honesty engine)", () => {
     expect(v.claimsMetricMoved).toBe(false);
   });
 
-  it("HONESTY INVARIANT: with analytics disconnected, no verdict ever claims the metric moved", () => {
-    // sweep a wide range of disconnected stats — none may claim the number moved
+  it("boundary: weeksActive === MIN_WEEKS_TO_JUDGE with shipped work + no analytics is shipping-unmeasured, not getting-started (strict <)", () => {
+    const v = gradeObjective({ ...base, weeksActive: MIN_WEEKS_TO_JUDGE, executedTotal: 5, analyticsConnected: false });
+    expect(v.state).toBe("shipping-unmeasured");
+    expect(v.claimsMetricMoved).toBe(false);
+  });
+
+  it("HONESTY INVARIANT: with analytics disconnected, no verdict ever claims the metric moved — even if a delta is present", () => {
+    // sweep a wide range of disconnected stats — none may claim the number moved.
+    // metricDeltaPct is swept too (including real values) to prove analyticsConnected
+    // ALONE gates the measured branch, not the metricDeltaPct !== undefined guard.
     for (const weeksActive of [0, 1, 2, 3, 5, 10])
       for (const executedTotal of [0, 1, 5, 50])
         for (const executedRecent of [0, 1, 5])
-          for (const executedThisWeek of [0, 1, 3]) {
-            const v = gradeObjective({ weeksActive, executedTotal, executedRecent, executedThisWeek,
-              inFlight: 0, proposedPending: 0, analyticsConnected: false });
-            expect(v.claimsMetricMoved).toBe(false);
-            expect(v.state).not.toBe("measured-working");
-            expect(v.state).not.toBe("measured-flat");
-          }
+          for (const executedThisWeek of [0, 1, 3])
+            for (const metricDeltaPct of [undefined, 12, -5]) {
+              const v = gradeObjective({ weeksActive, executedTotal, executedRecent, executedThisWeek,
+                inFlight: 0, proposedPending: 0, analyticsConnected: false, metricDeltaPct });
+              expect(v.claimsMetricMoved).toBe(false);
+              expect(v.state).not.toBe("measured-working");
+              expect(v.state).not.toBe("measured-flat");
+            }
   });
 });

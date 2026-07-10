@@ -55,16 +55,20 @@ export function gradeObjective(stats: ObjectiveStats): Verdict {
     weeksActive,
     executedTotal,
     executedRecent,
-    executedThisWeek,
     analyticsConnected,
     metricDeltaPct,
   } = stats;
 
-  // 1. Nothing has ever gone live, or too new to judge.
+  // 1. Nothing has ever gone live, or too new to judge. The headline must LEAD
+  //    with the truth: when work has already shipped (too-new sub-case), saying
+  //    "nothing has gone live" is a false headline — branch on executedTotal.
   if (executedTotal === 0 || weeksActive < MIN_WEEKS_TO_JUDGE) {
     return {
       state: "getting-started",
-      headline: "Nothing has gone live yet — this loop is just getting set up.",
+      headline:
+        executedTotal === 0
+          ? "Nothing has gone live yet — this loop is just getting set up."
+          : `Still early — ${executedTotal} send(s) have gone live, but it's too soon to judge the loop.`,
       recommendation:
         "Approve and send the first drafts so there is real work to measure.",
       claimsMetricMoved: false,
