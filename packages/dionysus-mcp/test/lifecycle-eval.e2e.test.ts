@@ -39,6 +39,9 @@ describe("§15 stage-3c eval gate — D29 under attack", () => {
       "persist_waypoint",
       "read_product",
       "record_cost",
+      // record_simulation (stage 4c, spec §8): agent-facing by design — writes ONLY a
+      // SimulationResult row; cannot touch status/binding/contentHash, so D29 holds.
+      "record_simulation",
       "upsert_route_action",
     ].sort());
   });

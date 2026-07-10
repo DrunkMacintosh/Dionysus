@@ -20,6 +20,7 @@ import {
   type RouteActionInput,
 } from "./tools/plan.js";
 import { persistAsset, type AssetInput } from "./tools/asset.js";
+import { recordSimulation, SIMULATION_ENGINES, type SimulationInput } from "./tools/simulation.js";
 
 /** Single source of truth for tool input shapes.
  *  INVARIANT (D27.1): no shape ever includes businessId — identity is ambient. */
@@ -63,6 +64,10 @@ export const TOOL_SCHEMAS = {
   persist_asset: {
     channel: z.string().min(1), kind: z.string().min(1), content: z.unknown(),
     routeActionId: z.string().optional(),
+  },
+  record_simulation: {
+    routeActionId: z.string().min(1), engine: z.enum(SIMULATION_ENGINES),
+    prediction: z.unknown(), confidence: z.number().min(0).max(1),
   },
 } satisfies Record<string, ZodRawShape>;
 
@@ -166,6 +171,16 @@ export function buildServer(identity: Identity): McpServer {
       inputSchema: TOOL_SCHEMAS.persist_asset,
     },
     async (args) => asText(await persistAsset(identity, args as AssetInput)),
+  );
+
+  server.registerTool(
+    "record_simulation",
+    {
+      description:
+        "Record a pre-flight simulation prediction for a route action (labeled prediction, never fact).",
+      inputSchema: TOOL_SCHEMAS.record_simulation,
+    },
+    async (args) => asText(await recordSimulation(identity, args as SimulationInput)),
   );
 
   return server;

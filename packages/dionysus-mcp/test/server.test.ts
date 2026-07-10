@@ -37,6 +37,15 @@ describe("D27.1 — tool schemas", () => {
     expect(Object.keys(TOOL_SCHEMAS)).toContain("persist_asset");
     expect(Object.keys(TOOL_SCHEMAS.persist_asset)).not.toContain("businessId");
   });
+
+  it("record_simulation is registered, businessId-free, engine-enum'd", () => {
+    expect(Object.keys(TOOL_SCHEMAS)).toContain("record_simulation");
+    const shape = TOOL_SCHEMAS.record_simulation as Record<string, z.ZodTypeAny>;
+    expect(Object.keys(shape)).not.toContain("businessId");
+    expect(shape.engine.safeParse("focus_group").success).toBe(true);
+    expect(shape.engine.safeParse("oracle").success).toBe(false);
+    expect(shape.confidence.safeParse(1.5).success).toBe(false);
+  });
 });
 
 describe("buildServer", () => {
