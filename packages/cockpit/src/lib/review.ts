@@ -208,9 +208,15 @@ export async function listRadarObservations(identity: Identity, limit = 20): Pro
 // are ordered by RouteWaypoint.order) with each waypoint's action nodes beneath it
 // (grouped by the shared source waypointId, in the returned action-node order).
 // Idempotent: a re-view re-runs the mirror (find-or-create), so the shape is stable
-// and no rows duplicate. Identity-scoped like the other cockpit reads; NOT an MCP tool.
+// and no rows duplicate. Each action also carries its verified-live `outcome` (Task 5) —
+// the `caused` outcome node the mirror created iff the action actually shipped (executed +
+// verified), else null. Identity-scoped like the other cockpit reads; NOT an MCP tool.
 // ---------------------------------------------------------------------------
-export type TimelineAction = { nodeId: string; label: string; rationale: string };
+// A verified-live outcome (Task 5, stage 5b): the go-live FACT the mirror records for an action that
+// ACTUALLY shipped (executed + verifiedAt). title = "went live on {channel}", detail = the live postedUrl.
+// It is NOT a measured metric (measured outcomes need analytics — 5c). Null for any not-yet-live action.
+export type TimelineOutcome = { title: string; detail: string };
+export type TimelineAction = { nodeId: string; label: string; rationale: string; outcome: TimelineOutcome | null };
 export type TimelineWaypoint = { nodeId: string; title: string; goal: string; actions: TimelineAction[] };
 export type TimelineView = { hasRoute: boolean; waypoints: TimelineWaypoint[] };
 
@@ -233,12 +239,25 @@ export async function getTimeline(identity: Identity): Promise<TimelineView> {
     if (wpNode.waypointId) byWaypointId.set(wpNode.waypointId, wp);
   }
 
-  // Action nodes beneath their waypoint, in mirror (RouteAction.createdAt) order.
+  // Action nodes beneath their waypoint, in mirror (RouteAction.createdAt) order — each with its
+  // verified-live outcome attached (the compounding loop made visible).
   for (const actionNodeId of actionNodeIds) {
     const aNode = await prisma.memoryNode.findFirst({ where: { id: actionNodeId, businessId: identity.businessId } });
     if (!aNode || !aNode.waypointId) continue;
     const wp = byWaypointId.get(aNode.waypointId);
-    if (wp) wp.actions.push({ nodeId: aNode.id, label: aNode.title, rationale: aNode.body });
+    if (!wp) continue;
+    // Task 5: the mirror created a `caused` outcome node ONLY if this action actually went live
+    // (executed + verified). Traverse that edge (scoped) and attach the go-live FACT; a proposed /
+    // approved / executing action has no outcome edge, so `outcome` stays null.
+    let outcome: TimelineOutcome | null = null;
+    const causedEdge = await prisma.memoryEdge.findFirst({
+      where: { businessId: identity.businessId, fromId: aNode.id, kind: "caused" } });
+    if (causedEdge) {
+      const outcomeNode = await prisma.memoryNode.findFirst({
+        where: { id: causedEdge.toId, businessId: identity.businessId, type: "outcome" } });
+      if (outcomeNode) outcome = { title: outcomeNode.title, detail: outcomeNode.body };
+    }
+    wp.actions.push({ nodeId: aNode.id, label: aNode.title, rationale: aNode.body, outcome });
   }
 
   return { hasRoute: true, waypoints };

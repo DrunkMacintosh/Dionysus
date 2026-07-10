@@ -4,6 +4,7 @@ import { persistAsset, setActionAsset } from "dionysus-mcp/tools/asset";
 import { recordSimulation } from "dionysus-mcp/tools/simulation";
 import { recordObservation } from "dionysus-mcp/tools/memory";
 import { createObjective, persistRoute, persistWaypoint, upsertRouteAction } from "dionysus-mcp/tools/plan";
+import { approveAction, startExecution, completeExecution } from "dionysus-mcp/tools/lifecycle";
 import { listProposedDrafts, getRouteOverview, getDigestHeader, listSendQueue, listExecuted, isRenderableHttpUrl, listRadarObservations, getCmoReport, getTimeline } from "../src/lib/review";
 
 const A = { businessId: "biz_cockpit_rev" };
@@ -341,5 +342,79 @@ describe("timeline service (getTimeline — lazy mirror-on-view)", () => {
     const view = await getTimeline(TLO);
     expect(view.hasRoute).toBe(false);
     expect(view.waypoints).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Timeline outcomes (Task 5) — the compounding loop made visible. getTimeline
+// attaches each action's `caused` outcome node (the verified-live FACT the mirror
+// creates for an executed+verified send) so the page can render "✓ went live …"
+// beneath an action that actually shipped. §13 honesty gate lives in the mirror:
+// only an executed+verified action earns an outcome; a proposed action stays null.
+// ---------------------------------------------------------------------------
+const TLX = { businessId: "biz_cockpit_timeline_outcome" };
+const TLXO = { businessId: "biz_cockpit_timeline_outcome_other" };
+
+describe("timeline outcomes (getTimeline attaches verified-live outcomes)", () => {
+  const POSTED_URL = "https://news.ycombinator.com/item?id=verified5b";
+
+  beforeAll(async () => {
+    for (const id of [TLX.businessId, TLXO.businessId]) {
+      await prisma.memoryEdge.deleteMany({ where: { businessId: id } });
+      await prisma.memoryNode.deleteMany({ where: { businessId: id } });
+      await prisma.asset.deleteMany({ where: { businessId: id } });
+      await prisma.routeAction.deleteMany({ where: { businessId: id } });
+      await prisma.routeWaypoint.deleteMany({ where: { businessId: id } });
+      await prisma.route.deleteMany({ where: { businessId: id } });
+      await prisma.objective.deleteMany({ where: { businessId: id } });
+      await prisma.business.upsert({ where: { id }, create: { id, name: id }, update: {} });
+    }
+
+    // TLX: one waypoint, two actions — one driven executed+verified (earns an outcome),
+    // one left proposed (no outcome). Seeded via the real plan tools.
+    const { objectiveId } = await createObjective(TLX, { kind: "signups", target: "100", metric: "users" });
+    const { routeId } = await persistRoute(TLX, { objectiveId, source: "case" });
+    const { waypointId } = await persistWaypoint(TLX, { routeId, order: 1, title: "Launch week", goal: "20 signups" });
+    const { actionId: executedActionId } = await upsertRouteAction(TLX, { waypointId, employeeRole: "copywriter", type: "post", rationale: "hn launch" });
+    await upsertRouteAction(TLX, { waypointId, employeeRole: "designer", type: "asset", rationale: "og image" });
+
+    // Drive the copywriter/post action through the REAL lifecycle to executed, then stamp the
+    // verified-send fact (verifiedAt + live URL) — exactly what earns an outcome node in the mirror.
+    const { assetId } = await persistAsset(TLX, { channel: "hackernews", kind: "post", content: { title: "Show HN", body: "We built X" }, routeActionId: executedActionId });
+    await setActionAsset(TLX, executedActionId, assetId);
+    await approveAction(TLX, { routeActionId: executedActionId, principal: "founder" });
+    await startExecution(TLX, { routeActionId: executedActionId, runId: "run_tl_5b" });
+    await completeExecution(TLX, { routeActionId: executedActionId });
+    await prisma.routeAction.update({ where: { id: executedActionId }, data: { verifiedAt: new Date(), postedUrl: POSTED_URL } });
+
+    // TLXO: a second tenant with its own route + one proposed action — proves TLX's verified-live
+    // fact never leaks across the businessId boundary (its action's outcome must stay null).
+    const { objectiveId: otherObj } = await createObjective(TLXO, { kind: "signups", target: "100", metric: "users" });
+    const { routeId: otherRoute } = await persistRoute(TLXO, { objectiveId: otherObj, source: "case" });
+    const { waypointId: otherWp } = await persistWaypoint(TLXO, { routeId: otherRoute, order: 1, title: "Their launch", goal: "their goal" });
+    await upsertRouteAction(TLXO, { waypointId: otherWp, employeeRole: "copywriter", type: "post", rationale: "their draft" });
+  });
+
+  it("attaches the verified-live outcome to the executed action and null to the proposed one", async () => {
+    const view = await getTimeline(TLX);
+    expect(view.hasRoute).toBe(true);
+    expect(view.waypoints).toHaveLength(1);
+    const actions = view.waypoints[0]!.actions;
+    expect(actions).toHaveLength(2);
+
+    const executed = actions.find((a) => a.label === "copywriter/post")!;
+    expect(executed.outcome).not.toBeNull();
+    expect(executed.outcome!.title).toBe("went live on hackernews"); // channel from the bound asset
+    expect(executed.outcome!.detail).toBe(POSTED_URL);                // the verified-live URL, not a metric
+
+    const proposed = actions.find((a) => a.label === "designer/asset")!;
+    expect(proposed.outcome).toBeNull(); // a proposed action has not gone live — no outcome
+  });
+
+  it("another tenant's action carries no outcome — TLX's verified-live fact does not leak (identity-scoped)", async () => {
+    const view = await getTimeline(TLXO);
+    expect(view.hasRoute).toBe(true);
+    expect(view.waypoints).toHaveLength(1);
+    expect(view.waypoints[0]!.actions[0]!.outcome).toBeNull();
   });
 });

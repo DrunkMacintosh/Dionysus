@@ -1,13 +1,15 @@
 import { requireSession } from "../../lib/auth";
-import { getTimeline } from "../../lib/review";
+import { getTimeline, isRenderableHttpUrl } from "../../lib/review";
 
 export const dynamic = "force-dynamic";
 
 // "How your plan has evolved" (§13 anchored-to-the-plan). The live evolution graph:
 // getTimeline lazily mirrors the structured plan into memory nodes on view, then
-// renders the waypoint spine in order with each waypoint's actions beneath it. All
-// waypoint/action text is React-escaped JSX children — no dangerouslySetInnerHTML,
-// and the timeline carries no URLs, so there is no href sink to guard.
+// renders the waypoint spine in order with each waypoint's actions beneath it, and a
+// "✓ went live …" outcome beneath any action that actually shipped (Task 5 — the loop
+// made visible). All waypoint/action/outcome text is React-escaped JSX children — no
+// dangerouslySetInnerHTML — and the outcome's postedUrl becomes an <a href> ONLY when
+// it parses as http(s) (isRenderableHttpUrl), so a stored non-http URL renders as text.
 export default async function TimelinePage() {
   const session = await requireSession();
   const timeline = await getTimeline({ businessId: session.businessId });
@@ -38,6 +40,18 @@ export default async function TimelinePage() {
                     <li key={a.nodeId} style={{ border: "1px solid #eee", borderRadius: 8, padding: 10, marginBottom: 8 }}>
                       <strong>{a.label}</strong>
                       {a.rationale ? <span style={{ color: "#666" }}> · {a.rationale}</span> : null}
+                      {a.outcome ? (
+                        <div style={{ marginTop: 6, color: "#0a7d28", fontSize: 13 }}>
+                          ✓ {a.outcome.title}
+                          {a.outcome.detail ? (
+                            isRenderableHttpUrl(a.outcome.detail) ? (
+                              <> — <a href={a.outcome.detail} target="_blank" rel="noopener noreferrer">{a.outcome.detail}</a></>
+                            ) : (
+                              <> — {a.outcome.detail}</>
+                            )
+                          ) : null}
+                        </div>
+                      ) : null}
                     </li>
                   ))}
                 </ul>
