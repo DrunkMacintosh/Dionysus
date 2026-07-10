@@ -164,6 +164,9 @@ model RouteAction {
   rejectionCount Int      @default(0)
   digestId       String?
   editDistance   Int?
+  postedUrl      String?
+  verifiedAt     DateTime?
+  outcome        String?
   assetId      String?
   assets       Asset[]
   createdAt    DateTime @default(now())
