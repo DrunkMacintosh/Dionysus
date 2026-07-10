@@ -10,6 +10,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <nav style={{ display: "flex", gap: 16, marginBottom: 24 }}>
           <a href="/">Home</a>
           <a href="/route">Route</a>
+          <a href="/timeline">Timeline</a>
           <a href="/radar">Radar</a>
           <a href="/drafts">Drafts</a>
           <a href="/send">Send</a>

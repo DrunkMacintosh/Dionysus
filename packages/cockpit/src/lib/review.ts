@@ -3,6 +3,7 @@ import type { Identity } from "dionysus-mcp/identity";
 import { buildDailyDigest } from "dionysus-mcp/tools/digest";
 import { listObservations } from "dionysus-mcp/tools/memory";
 import { buildCmoReport, type CmoReport } from "dionysus-mcp/tools/cmo-report";
+import { mirrorPlanToGraph } from "dionysus-mcp/tools/memory-graph";
 
 export type { CmoReport };
 
@@ -196,6 +197,51 @@ export async function listRadarObservations(identity: Identity, limit = 20): Pro
     nodeId: c.nodeId, title: c.title, body: c.body,
     sourceUrl: c.sourceUrl, confidence: c.confidence, createdAt: c.createdAt,
   }));
+}
+
+// ---------------------------------------------------------------------------
+// Timeline surface (Task 4) — the read behind the "How your plan has evolved"
+// page. getTimeline is the request-boundary wrapper where the REAL clock enters:
+// it LAZILY mirrors the structured plan into the evolution graph on view
+// (mirrorPlanToGraph, stamping new Date() here — the digest/lazy-on-view pattern),
+// then reads back the mirrored waypoint spine IN ORDER (the returned waypointNodeIds
+// are ordered by RouteWaypoint.order) with each waypoint's action nodes beneath it
+// (grouped by the shared source waypointId, in the returned action-node order).
+// Idempotent: a re-view re-runs the mirror (find-or-create), so the shape is stable
+// and no rows duplicate. Identity-scoped like the other cockpit reads; NOT an MCP tool.
+// ---------------------------------------------------------------------------
+export type TimelineAction = { nodeId: string; label: string; rationale: string };
+export type TimelineWaypoint = { nodeId: string; title: string; goal: string; actions: TimelineAction[] };
+export type TimelineView = { hasRoute: boolean; waypoints: TimelineWaypoint[] };
+
+export async function getTimeline(identity: Identity): Promise<TimelineView> {
+  const route = await prisma.route.findFirst({
+    where: { businessId: identity.businessId }, orderBy: { createdAt: "desc" } });
+  if (!route) return { hasRoute: false, waypoints: [] };
+
+  // Lazy mirror-on-view: the real clock enters the injected-clock mirror exactly here.
+  const { waypointNodeIds, actionNodeIds } = await mirrorPlanToGraph(identity, route.id, new Date());
+
+  // Waypoint spine, in mirror (RouteWaypoint.order) order.
+  const waypoints: TimelineWaypoint[] = [];
+  const byWaypointId = new Map<string, TimelineWaypoint>();
+  for (const wpNodeId of waypointNodeIds) {
+    const wpNode = await prisma.memoryNode.findFirst({ where: { id: wpNodeId, businessId: identity.businessId } });
+    if (!wpNode) continue;
+    const wp: TimelineWaypoint = { nodeId: wpNode.id, title: wpNode.title, goal: wpNode.body, actions: [] };
+    waypoints.push(wp);
+    if (wpNode.waypointId) byWaypointId.set(wpNode.waypointId, wp);
+  }
+
+  // Action nodes beneath their waypoint, in mirror (RouteAction.createdAt) order.
+  for (const actionNodeId of actionNodeIds) {
+    const aNode = await prisma.memoryNode.findFirst({ where: { id: actionNodeId, businessId: identity.businessId } });
+    if (!aNode || !aNode.waypointId) continue;
+    const wp = byWaypointId.get(aNode.waypointId);
+    if (wp) wp.actions.push({ nodeId: aNode.id, label: aNode.title, rationale: aNode.body });
+  }
+
+  return { hasRoute: true, waypoints };
 }
 
 export type DigestHeader = { digestId: string; date: string; itemCount: number; reviewedAt: Date | null; openCount: number };

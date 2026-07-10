@@ -3,7 +3,8 @@ import { prisma } from "dionysus-mcp/db";
 import { persistAsset, setActionAsset } from "dionysus-mcp/tools/asset";
 import { recordSimulation } from "dionysus-mcp/tools/simulation";
 import { recordObservation } from "dionysus-mcp/tools/memory";
-import { listProposedDrafts, getRouteOverview, getDigestHeader, listSendQueue, listExecuted, isRenderableHttpUrl, listRadarObservations, getCmoReport } from "../src/lib/review";
+import { createObjective, persistRoute, persistWaypoint, upsertRouteAction } from "dionysus-mcp/tools/plan";
+import { listProposedDrafts, getRouteOverview, getDigestHeader, listSendQueue, listExecuted, isRenderableHttpUrl, listRadarObservations, getCmoReport, getTimeline } from "../src/lib/review";
 
 const A = { businessId: "biz_cockpit_rev" };
 const B = { businessId: "biz_cockpit_rev_other" };
@@ -272,5 +273,73 @@ describe("isRenderableHttpUrl (verified-history href guard)", () => {
     expect(isRenderableHttpUrl("not a url")).toBe(false);
     expect(isRenderableHttpUrl("")).toBe(false);
     expect(isRenderableHttpUrl(null)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Timeline service (getTimeline) — the read behind the "How your plan has evolved"
+// page. getTimeline finds the latest route, LAZILY mirrors the structured plan into
+// the evolution graph (mirrorPlanToGraph at the request boundary), then reads the
+// mirrored waypoint spine (in order) with each waypoint's action nodes beneath it.
+// The mirror is idempotent, so a re-view (second call) is stable — same shape, no dup.
+// ---------------------------------------------------------------------------
+const TL = { businessId: "biz_cockpit_timeline" };
+const TLO = { businessId: "biz_cockpit_timeline_other" };
+
+describe("timeline service (getTimeline — lazy mirror-on-view)", () => {
+  beforeAll(async () => {
+    for (const id of [TL.businessId, TLO.businessId]) {
+      await prisma.memoryEdge.deleteMany({ where: { businessId: id } });
+      await prisma.memoryNode.deleteMany({ where: { businessId: id } });
+      await prisma.routeAction.deleteMany({ where: { businessId: id } });
+      await prisma.routeWaypoint.deleteMany({ where: { businessId: id } });
+      await prisma.route.deleteMany({ where: { businessId: id } });
+      await prisma.objective.deleteMany({ where: { businessId: id } });
+      await prisma.business.upsert({ where: { id }, create: { id, name: id }, update: {} });
+    }
+    // Seed a real structured plan via the plan tools: 2 ordered waypoints with actions.
+    const { objectiveId } = await createObjective(TL, { kind: "signups", target: "100", metric: "users" });
+    const { routeId } = await persistRoute(TL, { objectiveId, source: "case" });
+    const { waypointId: wp1 } = await persistWaypoint(TL, { routeId, order: 1, title: "Launch week", goal: "20 signups" });
+    const { waypointId: wp2 } = await persistWaypoint(TL, { routeId, order: 2, title: "Iterate", goal: "double down" });
+    await upsertRouteAction(TL, { waypointId: wp1, employeeRole: "copywriter", type: "post", rationale: "hn launch" });
+    await upsertRouteAction(TL, { waypointId: wp1, employeeRole: "designer", type: "asset", rationale: "og image" });
+    await upsertRouteAction(TL, { waypointId: wp2, employeeRole: "copywriter", type: "post", rationale: "follow up" });
+  });
+
+  it("mirrors the plan and returns the waypoint spine in order with actions beneath each", async () => {
+    const view = await getTimeline(TL);
+    expect(view.hasRoute).toBe(true);
+    expect(view.waypoints).toHaveLength(2);
+
+    const [first, second] = view.waypoints;
+    expect(first!).toMatchObject({ title: "Launch week", goal: "20 signups" });
+    expect(first!.nodeId).toBeTruthy();
+    expect(first!.actions).toHaveLength(2);
+    expect(first!.actions[0]).toMatchObject({ label: "copywriter/post", rationale: "hn launch" });
+    expect(first!.actions[1]).toMatchObject({ label: "designer/asset", rationale: "og image" });
+    expect(first!.actions[0]!.nodeId).toBeTruthy();
+
+    expect(second!).toMatchObject({ title: "Iterate", goal: "double down" });
+    expect(second!.actions).toHaveLength(1);
+    expect(second!.actions[0]).toMatchObject({ label: "copywriter/post", rationale: "follow up" });
+  });
+
+  it("is idempotent on re-view: a second call returns the same shape and node ids (no dup)", async () => {
+    const firstView = await getTimeline(TL);
+    const secondView = await getTimeline(TL);
+    expect(secondView.hasRoute).toBe(true);
+    expect(secondView.waypoints).toHaveLength(2);
+    expect(secondView.waypoints[0]!.actions).toHaveLength(2);
+    expect(secondView.waypoints[1]!.actions).toHaveLength(1);
+    // Stable ids across views — the mirror found existing nodes, it did not create new ones.
+    expect(secondView.waypoints.map((w) => w.nodeId)).toEqual(firstView.waypoints.map((w) => w.nodeId));
+    expect(secondView.waypoints[0]!.actions.map((a) => a.nodeId)).toEqual(firstView.waypoints[0]!.actions.map((a) => a.nodeId));
+  });
+
+  it("a tenant with no route gets hasRoute:false and an empty spine", async () => {
+    const view = await getTimeline(TLO);
+    expect(view.hasRoute).toBe(false);
+    expect(view.waypoints).toEqual([]);
   });
 });
