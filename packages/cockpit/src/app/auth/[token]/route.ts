@@ -6,6 +6,11 @@ import { SESSION_COOKIE, SESSION_TTL_MS, sessionSecret } from "../../../lib/auth
 export async function GET(req: Request, ctx: { params: Promise<{ token: string }> }): Promise<NextResponse> {
   const { token } = await ctx.params;
 
+  // Read the session secret FIRST, before touching the single-use link. A missing
+  // secret is a server misconfig, so throwing here yields a 500 (fail-closed) rather
+  // than a redirect: nothing is redeemed, nothing proceeds, no login link is burned.
+  const secret = sessionSecret();
+
   // H3 origin-binding: when a canonical base URL is configured, only redeem for a
   // request whose host matches it. This runs BEFORE verifyMagicLink so a forged Host
   // header cannot burn the founder's single-use link (no token consumption on mismatch).
@@ -19,7 +24,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
     const { businessId, email } = await verifyMagicLink(token);
     const session = createSessionToken(
       { businessId, email, exp: Date.now() + SESSION_TTL_MS },
-      sessionSecret(),
+      secret,
     );
     const res = NextResponse.redirect(new URL("/", req.url));
     res.cookies.set(SESSION_COOKIE, session, {
