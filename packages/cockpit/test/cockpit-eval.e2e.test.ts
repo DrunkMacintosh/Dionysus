@@ -13,6 +13,7 @@ const SECRET = "eval-secret";
 const A = { businessId: "biz_cockpit_eval_a" };
 const B = { businessId: "biz_cockpit_eval_b" };
 let actionA = "";
+let waypointA = "";
 
 beforeAll(async () => {
   for (const id of [A.businessId, B.businessId]) {
@@ -31,6 +32,7 @@ beforeAll(async () => {
   const { assetId } = await persistAsset(A, { channel: "x", kind: "post", content: { body: "reviewed words" }, routeActionId: action.id });
   await setActionAsset(A, action.id, assetId);
   actionA = action.id;
+  waypointA = wp.id;
 });
 
 describe("§15 stage-4a eval gate — cockpit auth + approval under attack", () => {
@@ -59,22 +61,48 @@ describe("§15 stage-4a eval gate — cockpit auth + approval under attack", () 
     expect(verifySessionToken(`${forgedBody}.${sig}`, SECRET)).toBeNull();
   });
 
-  it("a VALID session for business B cannot see or approve business A's draft", async () => {
+  it("a VALID session for business B cannot see or approve business A's fresh, still-proposed draft", async () => {
+    // A FRESH, still-proposed, asset-bound action in tenant A — minted here (on the beforeAll
+    // waypoint, exactly as beforeAll mints actionA) so it is genuinely reviewable and approvable,
+    // and the ONLY thing that can keep it out of B's reach is tenant scoping. (Test 1 already
+    // APPROVED actionA, so listProposedDrafts's status:"proposed" filter would exclude it
+    // regardless of scoping, and an unscoped approveAction on it would throw "Invalid transition"
+    // — targeting that approved row makes both assertions below vacuous. This row is still
+    // "proposed", so a missing businessId filter has nowhere to hide.)
+    const freshA = await prisma.routeAction.create({ data: { businessId: A.businessId, waypointId: waypointA, employeeRole: "copywriter", type: "post", status: "proposed" } });
+    const { assetId } = await persistAsset(A, { channel: "x", kind: "post", content: { body: "A-only words" }, routeActionId: freshA.id });
+    await setActionAsset(A, freshA.id, assetId);
+
     const { token } = await issueMagicLink(B.businessId, "founder-b@example.com");
-    const b = await verifyMagicLink(token);
+    const b = await verifyMagicLink(token); // B's session is genuinely valid (real magic-link redemption)
+
     const drafts = await listProposedDrafts({ businessId: b.businessId });
-    expect(drafts.map((d) => d.actionId)).not.toContain(actionA);
-    await expect(approveAction({ businessId: b.businessId }, { routeActionId: actionA, principal: b.email }))
-      .rejects.toThrow(/not found|scope|invalid transition/i);
-    const still = await prisma.routeAction.findUnique({ where: { id: actionA } });
-    expect(still!.approvedBy).toBe("founder-a@example.com"); // A's approval untouched
+    expect(drafts.map((d) => d.actionId)).not.toContain(freshA.id); // proposed + bound → only scoping can exclude it
+    // NO "invalid transition" alternative in this regex (unlike an approved target): an UNSCOPED
+    // loadScopedAction would find this still-proposed row and PASS assertTransition, so the refusal
+    // MUST be scope-based ("…not found in this business scope"). An "invalid transition" here would
+    // mean the row was reachable and only its status saved us — that is not tenant isolation.
+    await expect(approveAction({ businessId: b.businessId }, { routeActionId: freshA.id, principal: b.email }))
+      .rejects.toThrow(/not found|scope/i);
+    const still = await prisma.routeAction.findUnique({ where: { id: freshA.id } });
+    expect(still!.status).toBe("proposed");  // B's failed approve left the row untouched
+    expect(still!.approvedBy).toBeNull();     // B could not approve A's draft
   });
 
   it("session identity flows into the D29 hash refusal (tamper after approve -> execution refused)", async () => {
+    // Make the title true: thread a REAL verified session identity into the send path instead of a
+    // hardcoded businessId literal. Mint+redeem a fresh magic link for A, sign+verify a session
+    // cookie, and drive startExecution off the VERIFIED payload's businessId.
+    const { token } = await issueMagicLink(A.businessId, "founder-a@example.com");
+    const identity = await verifyMagicLink(token);
+    const cookie = createSessionToken({ businessId: identity.businessId, email: identity.email, exp: Date.now() + 60_000 }, SECRET);
+    const session = verifySessionToken(cookie, SECRET)!;
+    expect(session.businessId).toBe(A.businessId);
+
     const action = await prisma.routeAction.findUnique({ where: { id: actionA } });
     await prisma.asset.update({ where: { id: action!.assetId! }, data: { contentJson: JSON.stringify({ body: "swapped" }) } });
     const { startExecution } = await import("dionysus-mcp/tools/lifecycle");
-    await expect(startExecution({ businessId: A.businessId }, { routeActionId: actionA, runId: "r1" }))
+    await expect(startExecution({ businessId: session.businessId }, { routeActionId: actionA, runId: "r1" }))
       .rejects.toThrow(/hash mismatch/i);
   });
 });
