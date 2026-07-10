@@ -1,10 +1,11 @@
 import { prisma } from "dionysus-mcp/db";
 import type { Identity } from "dionysus-mcp/identity";
+import { buildDailyDigest } from "dionysus-mcp/tools/digest";
 
 export type DraftCard = {
   actionId: string; employeeRole: string; type: string;
   channel: string | null; title: string | null; body: string | null;
-  waypointTitle: string; rationale: string | null;
+  waypointTitle: string; rationale: string | null; editDistance: number | null;
 };
 
 export async function listProposedDrafts(identity: Identity): Promise<DraftCard[]> {
@@ -27,7 +28,8 @@ export async function listProposedDrafts(identity: Identity): Promise<DraftCard[
       body = null;
     }
     cards.push({ actionId: action.id, employeeRole: action.employeeRole, type: action.type,
-      channel: asset.channel, title, body, waypointTitle: wp?.title ?? "", rationale: action.rationale });
+      channel: asset.channel, title, body, waypointTitle: wp?.title ?? "", rationale: action.rationale,
+      editDistance: action.editDistance });
   }
   return cards;
 }
@@ -56,4 +58,14 @@ export async function getRouteOverview(identity: Identity): Promise<RouteOvervie
     objective: objective ? { kind: objective.kind, target: objective.target, metric: objective.metric, status: objective.status } : null,
     waypoints: out,
   };
+}
+
+export type DigestHeader = { digestId: string; date: string; itemCount: number; reviewedAt: Date | null; openCount: number };
+
+export async function getDigestHeader(identity: Identity): Promise<DigestHeader> {
+  const { digestId } = await buildDailyDigest(identity);
+  const digest = await prisma.digest.findFirst({ where: { id: digestId, businessId: identity.businessId } });
+  const openCount = await prisma.routeAction.count({
+    where: { businessId: identity.businessId, status: "proposed", assetId: { not: null } } });
+  return { digestId, date: digest!.date, itemCount: digest!.itemCount, reviewedAt: digest!.reviewedAt, openCount };
 }

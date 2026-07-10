@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { prisma } from "dionysus-mcp/db";
 import { persistAsset, setActionAsset } from "dionysus-mcp/tools/asset";
-import { listProposedDrafts, getRouteOverview } from "../src/lib/review";
+import { listProposedDrafts, getRouteOverview, getDigestHeader } from "../src/lib/review";
 
 const A = { businessId: "biz_cockpit_rev" };
 const B = { businessId: "biz_cockpit_rev_other" };
@@ -44,5 +44,12 @@ describe("review service", () => {
   it("another tenant sees nothing (identity-scoped reads)", async () => {
     expect(await listProposedDrafts(B)).toHaveLength(0);
     expect((await getRouteOverview(B)).objective).toBeNull();
+  });
+
+  it("digest header builds today's digest lazily and counts open drafts", async () => {
+    const header = await getDigestHeader(A);
+    expect(header.digestId).toBeTruthy();
+    expect(header.openCount).toBeGreaterThanOrEqual(1); // the bound draft from the fixture
+    expect(header.reviewedAt).toBeNull();
   });
 });
