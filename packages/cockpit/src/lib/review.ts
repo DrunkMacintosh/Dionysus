@@ -1,6 +1,7 @@
 import { prisma } from "dionysus-mcp/db";
 import type { Identity } from "dionysus-mcp/identity";
 import { buildDailyDigest } from "dionysus-mcp/tools/digest";
+import { listObservations } from "dionysus-mcp/tools/memory";
 
 export type DraftCard = {
   actionId: string; employeeRole: string; type: string;
@@ -163,6 +164,24 @@ export async function getRouteOverview(identity: Identity): Promise<RouteOvervie
     objective: objective ? { kind: objective.kind, target: objective.target, metric: objective.metric, status: objective.status } : null,
     waypoints: out,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Radar surface (Task 7) — the read-side for the cockpit "What I noticed" page.
+// listRadarObservations is a thin, identity-scoped wrapper over the mcp
+// listObservations, returning the founder-facing view of radar-sensed
+// market-observations newest-first. The page render-guards each sourceUrl with
+// isRenderableHttpUrl (a market-observation's sourceUrl is model-emitted, even
+// though runRadar checks it against the fetched set — still guarded on render).
+// ---------------------------------------------------------------------------
+export type ObservationView = { nodeId: string; title: string; body: string; sourceUrl: string | null; confidence: number; createdAt: Date };
+
+export async function listRadarObservations(identity: Identity, limit = 20): Promise<ObservationView[]> {
+  const cards = await listObservations(identity, limit);
+  return cards.map((c) => ({
+    nodeId: c.nodeId, title: c.title, body: c.body,
+    sourceUrl: c.sourceUrl, confidence: c.confidence, createdAt: c.createdAt,
+  }));
 }
 
 export type DigestHeader = { digestId: string; date: string; itemCount: number; reviewedAt: Date | null; openCount: number };

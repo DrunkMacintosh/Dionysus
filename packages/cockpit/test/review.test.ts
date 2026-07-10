@@ -2,7 +2,8 @@ import { describe, it, expect, beforeAll } from "vitest";
 import { prisma } from "dionysus-mcp/db";
 import { persistAsset, setActionAsset } from "dionysus-mcp/tools/asset";
 import { recordSimulation } from "dionysus-mcp/tools/simulation";
-import { listProposedDrafts, getRouteOverview, getDigestHeader, listSendQueue, listExecuted, isRenderableHttpUrl } from "../src/lib/review";
+import { recordObservation } from "dionysus-mcp/tools/memory";
+import { listProposedDrafts, getRouteOverview, getDigestHeader, listSendQueue, listExecuted, isRenderableHttpUrl, listRadarObservations } from "../src/lib/review";
 
 const A = { businessId: "biz_cockpit_rev" };
 const B = { businessId: "biz_cockpit_rev_other" };
@@ -170,6 +171,39 @@ describe("listExecuted ordering (verified history newest-first by verifiedAt)", 
   it("returns the row with the later verifiedAt first", async () => {
     const executed = await listExecuted(EO);
     expect(executed.map((c) => c.actionId)).toEqual([laterId, earlierId]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Radar surface service — the cockpit read-side for the "What I noticed" page.
+// listRadarObservations is a thin, identity-scoped wrapper over the mcp
+// listObservations, returning market-observations newest-first with view fields.
+// ---------------------------------------------------------------------------
+const RAD = { businessId: "biz_cockpit_radar" };
+const RADO = { businessId: "biz_cockpit_radar_other" };
+
+describe("radar surface service (listRadarObservations)", () => {
+  beforeAll(async () => {
+    for (const id of [RAD.businessId, RADO.businessId]) {
+      await prisma.memoryNode.deleteMany({ where: { businessId: id } });
+      await prisma.business.upsert({ where: { id }, create: { id, name: id }, update: {} });
+    }
+    await recordObservation(RAD, { title: "Older signal", body: "seen first", sourceUrl: "https://news.ycombinator.com/item?id=1", confidence: 0.4 });
+    await new Promise((r) => setTimeout(r, 5)); // strictly later createdAt so newest-first is deterministic
+    await recordObservation(RAD, { title: "Newer signal", body: "seen second", sourceUrl: "https://news.ycombinator.com/item?id=2", confidence: 0.8 });
+  });
+
+  it("returns market-observations newest-first with the view fields", async () => {
+    const obs = await listRadarObservations(RAD);
+    expect(obs).toHaveLength(2);
+    expect(obs[0]).toMatchObject({ title: "Newer signal", body: "seen second", sourceUrl: "https://news.ycombinator.com/item?id=2", confidence: 0.8 });
+    expect(obs[1]!.title).toBe("Older signal"); // newest-first
+    expect(obs[0]!.nodeId).toBeTruthy();
+    expect(obs[0]!.createdAt).toBeInstanceOf(Date);
+  });
+
+  it("another tenant sees no observations (identity-scoped reads)", async () => {
+    expect(await listRadarObservations(RADO)).toHaveLength(0);
   });
 });
 
