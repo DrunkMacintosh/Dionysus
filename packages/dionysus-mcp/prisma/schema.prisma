@@ -24,6 +24,7 @@ model Business {
   routeActions    RouteAction[]
   assets          Asset[]
   magicLinks      MagicLink[]
+  digests         Digest[]
 }
 
 model Product {
@@ -160,6 +161,8 @@ model RouteAction {
   approvedBy     String?
   runId          String?
   rejectionCount Int      @default(0)
+  digestId       String?
+  editDistance   Int?
   assetId      String?
   assets       Asset[]
   createdAt    DateTime @default(now())
@@ -178,6 +181,19 @@ model Asset {
   contentJson   String
   createdAt     DateTime @default(now())
 
+  @@index([businessId])
+}
+
+model Digest {
+  id         String    @id @default(cuid())
+  businessId String
+  business   Business  @relation(fields: [businessId], references: [id])
+  date       String
+  reviewedAt DateTime?
+  itemCount  Int       @default(0)
+  createdAt  DateTime  @default(now())
+
+  @@unique([businessId, date])
   @@index([businessId])
 }
 
