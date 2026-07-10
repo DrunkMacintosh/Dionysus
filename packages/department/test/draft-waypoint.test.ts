@@ -308,3 +308,80 @@ describe("draftWaypoint recall — the route so far is mirrored, read, and fence
     expect(outcomes.length).toBeGreaterThanOrEqual(1);
   });
 });
+
+// Stage 5b Task 4 (resilience I): recall is ADDITIVE — a transient graph write/read failure must
+// NEVER break drafting. draftWaypoint wraps mirrorPlanToGraph + buildAgentContext in a best-effort
+// try/catch: on ANY error it logs and falls back to an EMPTY route context (no route-so-far fence),
+// so drafting proceeds exactly as it did before recall existed. Failure INJECTION with no seam: a
+// waypoint owned by this business whose routeId points at a route owned by ANOTHER business. The
+// waypoint LOADS fine (scoped to us), but mirrorPlanToGraph's scoped route load misses (cross-tenant)
+// and THROWS "Route ... not found in this business scope" — a real throw down the real recall path.
+// The catch must swallow it and the draft must still be produced + persisted, sans route-so-far block.
+describe("draftWaypoint recall resilience — a graph recall throw never breaks drafting (additive fallback)", () => {
+  const FAIL = { businessId: "biz_draft_recall_fail" };
+  const OTHER = { businessId: "biz_draft_recall_fail_other" };
+  let wpId = "";
+  let actionId = "";
+
+  beforeAll(async () => {
+    // Cleanup order matters: FAIL's cross-tenant waypoint references OTHER's route, so FAIL's
+    // waypoints must be deleted BEFORE OTHER's route (FK). Clean FAIL fully, then OTHER.
+    await prisma.memoryEdge.deleteMany({ where: { businessId: FAIL.businessId } });
+    await prisma.memoryNode.deleteMany({ where: { businessId: FAIL.businessId } });
+    await prisma.asset.deleteMany({ where: { businessId: FAIL.businessId } });
+    await prisma.routeAction.deleteMany({ where: { businessId: FAIL.businessId } });
+    await prisma.routeWaypoint.deleteMany({ where: { businessId: FAIL.businessId } });
+    await prisma.route.deleteMany({ where: { businessId: FAIL.businessId } });
+    await prisma.objective.deleteMany({ where: { businessId: FAIL.businessId } });
+    await prisma.routeAction.deleteMany({ where: { businessId: OTHER.businessId } });
+    await prisma.routeWaypoint.deleteMany({ where: { businessId: OTHER.businessId } });
+    await prisma.route.deleteMany({ where: { businessId: OTHER.businessId } });
+    await prisma.objective.deleteMany({ where: { businessId: OTHER.businessId } });
+    await prisma.business.upsert({ where: { id: FAIL.businessId },
+      create: { id: FAIL.businessId, name: "Recall Fail Co", maxTokensPerDay: 100000 },
+      update: { maxTokensPerDay: 100000 } });
+    await prisma.business.upsert({ where: { id: OTHER.businessId },
+      create: { id: OTHER.businessId, name: "Other Co", maxTokensPerDay: 100000 },
+      update: { maxTokensPerDay: 100000 } });
+    // A route owned by OTHER — the cross-tenant target that makes the recall scope-load miss.
+    const objOther = await prisma.objective.create({ data: { businessId: OTHER.businessId, kind: "signups", target: "100", metric: "users", status: "active" } });
+    const routeOther = await prisma.route.create({ data: { businessId: OTHER.businessId, objectiveId: objOther.id, source: "case", status: "proposed" } });
+    // The waypoint belongs to FAIL but points at OTHER's route: it loads (scoped to FAIL), yet the
+    // recall's scoped route load (businessId = FAIL) misses → mirrorPlanToGraph throws "not found".
+    const wp = await prisma.routeWaypoint.create({ data: { businessId: FAIL.businessId, routeId: routeOther.id, order: 1, title: "Launch", goal: "20 signups", status: "active" } });
+    wpId = wp.id;
+    const a = await prisma.routeAction.create({ data: { businessId: FAIL.businessId, waypointId: wp.id, employeeRole: "copywriter", type: "post", status: "proposed", featuresJson: JSON.stringify({ channel: "x" }) } });
+    actionId = a.id;
+  });
+
+  it("a recall throw is caught: the draft is still produced + persisted, with NO route-so-far block", async () => {
+    const captured: string[] = [];
+    const harness: Harness = {
+      async runAgent(_def: AgentDef, input: string) {
+        captured.push(input);
+        return { finalOutput: JSON.stringify({ channel: "x", kind: "post", content: { body: "ok" } }) };
+      },
+      async completeOnce() { return "x"; },
+    };
+    // The recall (mirrorPlanToGraph) throws "Route ... not found in this business scope" — caught.
+    const res = await draftWaypoint(FAIL, { waypointId: wpId }, { harness, models: { brain: "fake" } });
+
+    // drafting STILL SUCCEEDS despite the recall throw (the whole point of the additive fallback)
+    expect(res.drafts).toHaveLength(1);
+    expect(res.drafts[0]!.channel).toBe("x");
+    // the draft was fully persisted + linked — drafting ran end-to-end, not aborted
+    const asset = await prisma.asset.findFirst({ where: { routeActionId: actionId } });
+    expect(asset).toBeTruthy();
+    const action = await prisma.routeAction.findUnique({ where: { id: actionId } });
+    expect(action?.assetId).toBeTruthy();
+
+    expect(captured).toHaveLength(1);
+    const input = captured[0]!;
+    // NO route-so-far block: the recall failed → empty context → no fence appended (fallback path)
+    expect(input).not.toContain("route-so-far");
+    expect(input).not.toContain("Route so far:");
+    // the load-bearing prompt pieces are intact — drafting proceeds exactly as before recall existed
+    expect(input).toContain('Action: draft a post for the "x" channel.');
+    expect(input).toContain("<<<UNTRUSTED-CONTENT waypoint-context>>>");
+  });
+});
