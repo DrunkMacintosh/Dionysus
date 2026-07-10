@@ -22,6 +22,7 @@ import { prisma } from "dionysus-mcp/db";
 import { checkBudget } from "dionysus-mcp/tools/cost-budget";
 import { persistAsset, setActionAsset } from "dionysus-mcp/tools/asset";
 import { mirrorPlanToGraph, buildAgentContext } from "dionysus-mcp/tools/memory-graph";
+import { deriveCraftBeliefs } from "dionysus-mcp/tools/belief-graph";
 import type { Harness } from "./llm/types.js";
 import { loadPrompt } from "./prompts.js";
 import { parseDraft } from "./draft-schemas.js";
@@ -81,7 +82,9 @@ export async function draftWaypoint(identity: Identity, input: { waypointId: str
   // as an instruction. Skip the block entirely when the recall is empty (no dead fence).
   let routeContextBlock = "";
   try {
-    await mirrorPlanToGraph(identity, wp.routeId, new Date());
+    const now = new Date();
+    await mirrorPlanToGraph(identity, wp.routeId, now);
+    await deriveCraftBeliefs(identity, { routeId: wp.routeId }, now); // 5c: update craft beliefs before recall
     const routeContext = await buildAgentContext(identity, {
       routeId: wp.routeId, waypointId: input.waypointId, role: "copywriter" });
     if (routeContext.text) routeContextBlock = fence("route-so-far", routeContext.text);

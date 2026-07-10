@@ -5,6 +5,7 @@ import { persistMemoryNode, persistMemoryEdge, mirrorPlanToGraph, buildAgentCont
 import { createObjective, persistRoute, persistWaypoint, upsertRouteAction } from "../src/tools/plan.js";
 import { persistAsset, setActionAsset } from "../src/tools/asset.js";
 import { approveAction, startExecution, completeExecution } from "../src/tools/lifecycle.js";
+import { persistCraftBelief } from "../src/tools/belief-graph.js";
 
 const BIZ = "biz_memgraph";
 
@@ -514,5 +515,42 @@ describe("buildAgentContext — plan-anchored causal recall (pure scoped read, b
 
   it("rejects a cross-tenant routeId (route not in the caller's business)", async () => {
     await expect(buildAgentContext(B, { routeId })).rejects.toThrow(/not found|scope/i);
+  });
+});
+
+describe("buildAgentContext learnings (5c)", () => {
+  const L = { businessId: "biz_agentctx_learn" };
+  const NOW = new Date("2026-07-11T00:00:00.000Z");
+  let learnRouteId: string;
+  let learnWpId: string;
+
+  beforeAll(async () => {
+    await prisma.business.upsert({ where: { id: L.businessId }, create: { id: L.businessId, name: L.businessId }, update: {} });
+    await prisma.memoryEdge.deleteMany({ where: { businessId: L.businessId } });
+    await prisma.memoryNode.deleteMany({ where: { businessId: L.businessId } });
+
+    // A mirrored one-waypoint route so ancestorPath is non-empty.
+    const { objectiveId } = await createObjective(L, { kind: "growth", target: "1k signups", metric: "signups" });
+    ({ routeId: learnRouteId } = await persistRoute(L, { objectiveId, source: "composed" }));
+    ({ waypointId: learnWpId } = await persistWaypoint(L, { routeId: learnRouteId, order: 1, title: "WP", goal: "Ship" }));
+    await mirrorPlanToGraph(L, learnRouteId, NOW);
+
+    // A copywriter belief that FLIPS positive→negative (so a superseded snapshot exists) + a strategist belief.
+    await persistCraftBelief(L, { role: "copywriter", featureKey: "channel=linkedin", belief: { confidence: 0.8, stance: "positive", lowConfidence: false, summary: "Tends to approve these drafts with little editing (5 accepted as-is, 0 rejected)." } });
+    await persistCraftBelief(L, { role: "copywriter", featureKey: "channel=linkedin", belief: { confidence: 0.6, stance: "negative", lowConfidence: false, summary: "Tends to reject these drafts (0 accepted as-is, 4 rejected)." } });
+    await persistCraftBelief(L, { role: "strategist", featureKey: "channel=x", belief: { confidence: 0.9, stance: "positive", lowConfidence: false, summary: "strategist craft" } });
+  });
+
+  it("surfaces role-scoped live beliefs as labeled hypotheses, excludes superseded, never a metric", async () => {
+    const ctx = await buildAgentContext(L, { routeId: learnRouteId, waypointId: learnWpId, role: "copywriter" });
+    expect(ctx.learnings).toHaveLength(1); // only the LIVE (negative) copywriter belief — snapshot + strategist excluded
+    expect(ctx.learnings[0]?.body).toContain("reject");
+    expect(ctx.text.toLowerCase()).toContain("learned"); // labeled hypotheses heading
+    expect(ctx.text).not.toMatch(/%|percent|conversion|engagement|impressions/i);
+  });
+
+  it("keeps learnings empty for a role with no beliefs (forward-compatible, no throw)", async () => {
+    const ctx = await buildAgentContext(L, { routeId: learnRouteId, waypointId: learnWpId, role: "nonexistent-role" });
+    expect(ctx.learnings).toEqual([]);
   });
 });

@@ -385,3 +385,47 @@ describe("draftWaypoint recall resilience — a graph recall throw never breaks 
     expect(input).toContain("<<<UNTRUSTED-CONTENT waypoint-context>>>");
   });
 });
+
+// 5c: draftWaypoint derives craft beliefs (best-effort) then recalls them as labeled hypotheses.
+describe("draftWaypoint craft-belief recall (5c)", () => {
+  const LEARN = { businessId: "biz_draft_learn" };
+  let learnWpId: string;
+
+  beforeAll(async () => {
+    await prisma.asset.deleteMany({ where: { businessId: LEARN.businessId } });
+    await prisma.routeAction.deleteMany({ where: { businessId: LEARN.businessId } });
+    await prisma.routeWaypoint.deleteMany({ where: { businessId: LEARN.businessId } });
+    await prisma.route.deleteMany({ where: { businessId: LEARN.businessId } });
+    await prisma.objective.deleteMany({ where: { businessId: LEARN.businessId } });
+    await prisma.memoryEdge.deleteMany({ where: { businessId: LEARN.businessId } });
+    await prisma.memoryNode.deleteMany({ where: { businessId: LEARN.businessId } });
+    await prisma.business.upsert({ where: { id: LEARN.businessId },
+      create: { id: LEARN.businessId, name: "Learn Co", maxTokensPerDay: 100000 },
+      update: { maxTokensPerDay: 100000 } });
+    const obj = await prisma.objective.create({ data: { businessId: LEARN.businessId, kind: "signups", target: "100", metric: "users", status: "active" } });
+    const route = await prisma.route.create({ data: { businessId: LEARN.businessId, objectiveId: obj.id, source: "case", status: "proposed" } });
+    const wp = await prisma.routeWaypoint.create({ data: { businessId: LEARN.businessId, routeId: route.id, order: 1, title: "Launch", goal: "20 signups", status: "active" } });
+    learnWpId = wp.id;
+    // Prior ACCEPTED-as-is history for copywriter/channel=x (>= MIN_EVIDENCE → a real belief forms).
+    for (let i = 0; i < 3; i++) {
+      await prisma.routeAction.create({ data: { businessId: LEARN.businessId, waypointId: wp.id, employeeRole: "copywriter", type: "post", status: "approved", editDistance: 0, featuresJson: JSON.stringify({ channel: "x" }) } });
+    }
+    // The proposed action to draft now (same feature — proposed = no acceptance signal).
+    await prisma.routeAction.create({ data: { businessId: LEARN.businessId, waypointId: wp.id, employeeRole: "copywriter", type: "post", status: "proposed", featuresJson: JSON.stringify({ channel: "x" }) } });
+  });
+
+  it("derives a belief then recalls it into the prompt (best-effort, never breaks drafting)", async () => {
+    const inputs: string[] = [];
+    const harness: Harness = {
+      async runAgent(_def: AgentDef, input: string) {
+        inputs.push(input);
+        return { finalOutput: JSON.stringify({ channel: "x", kind: "post", content: { title: "T", body: "Draft for x" } }) };
+      },
+    };
+    await draftWaypoint(LEARN, { waypointId: learnWpId }, { harness, models: { brain: "fake" } });
+
+    const beliefs = await prisma.memoryNode.findMany({ where: { businessId: LEARN.businessId, type: "learning" } });
+    expect(beliefs.length).toBeGreaterThanOrEqual(1); // a belief was derived from the accepted history
+    expect(inputs.some((i) => i.includes("What I've learned"))).toBe(true); // and recalled into the prompt
+  });
+});

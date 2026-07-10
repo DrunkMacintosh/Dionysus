@@ -239,9 +239,15 @@ export async function buildAgentContext(
     }
   }
 
-  // Learnings = role-scoped `learning` nodes — NONE at 5b (the belief layer is 5c); bounded by maxItems.
+  // Learnings = role-scoped LIVE `learning` beliefs (5c). Exclude superseded snapshots (their sourceId
+  // carries the "::superseded::" marker). Ordered by confidence desc, capped by maxItems. These are
+  // CRAFT hypotheses (what the founder tends to accept), NEVER performance/metric claims.
   const learningNodes = await prisma.memoryNode.findMany({
-    where: { businessId: identity.businessId, type: "learning", ...(input.role ? { role: input.role } : {}) },
+    where: {
+      businessId: identity.businessId, type: "learning",
+      NOT: { sourceId: { contains: "::superseded::" } },
+      ...(input.role ? { role: input.role } : {}),
+    },
     orderBy: { confidence: "desc" }, take: maxItems });
   const learnings = learningNodes.map((n) => ({ title: n.title, body: n.body, confidence: n.confidence }));
 
@@ -255,6 +261,13 @@ export async function buildAgentContext(
   for (const item of neighborhood) {
     if (item.kind !== "outcome") continue;
     lines.push(`Done: ${item.title}${item.detail ? ` — ${item.detail}` : ""}`);
+  }
+  // Labeled craft hypotheses — rendered as "what I've learned so far", NEVER as fact/metric.
+  if (learnings.length > 0) {
+    lines.push("What I've learned about your drafts so far (still learning where evidence is thin):");
+    for (const l of learnings) {
+      lines.push(`- ${l.body}`);
+    }
   }
   const text = lines.join("\n");
 
