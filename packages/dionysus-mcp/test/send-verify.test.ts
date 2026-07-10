@@ -81,13 +81,42 @@ describe("htmlContainsSnippet", () => {
     expect(htmlContainsSnippet(html, "show hn: we built x")).toBe(true);
   });
 
-  it("falls back to raw containment on broken markup without throwing", () => {
-    // The snippet lives only in a comment (excluded from cheerio .text()) inside
-    // deeply-broken markup: the cheerio path can't match it, so the raw-containment
-    // fallback must — and the pathological input must never throw.
-    const broken = "<div><span><<>></span><!-- verified-token alpha --></div>";
+  it("does NOT count a snippet that lives only in an HTML comment as verified", () => {
+    // §3 honesty: a comment is not visible posted content. On valid HTML that
+    // parses fine, a snippet present ONLY inside a <!-- comment --> must return
+    // FALSE — an unposted draft must never verify off invisible markup.
+    const html = "<div><p>real visible copy</p><!-- verified-token alpha --></div>";
+    expect(htmlContainsSnippet(html, "verified-token alpha")).toBe(false);
+  });
+
+  it("does NOT count a snippet that lives only inside a <script> tag as verified", () => {
+    // Script contents are never visible copy — the strip removes them before matching.
+    const html = '<div><p>hello world</p><script>var s = "verified-token alpha";</script></div>';
+    expect(htmlContainsSnippet(html, "verified-token alpha")).toBe(false);
+  });
+
+  it("does NOT count a snippet that lives only inside an attribute as verified", () => {
+    // Attribute values (title, hidden input value) are not extracted as text.
+    const linkHtml = '<a title="the approved snippet">link</a>';
+    expect(htmlContainsSnippet(linkHtml, "the approved snippet")).toBe(false);
+    const inputHtml = '<input type="hidden" value="the approved snippet" />';
+    expect(htmlContainsSnippet(inputHtml, "the approved snippet")).toBe(false);
+  });
+
+  it("counts the same snippet as verified when it is genuinely-visible <p> text", () => {
+    // Proves the strip does not over-remove visible content: identical snippet,
+    // now living in a real paragraph, must verify TRUE.
+    const html = "<div><p>the approved snippet</p></div>";
+    expect(htmlContainsSnippet(html, "the approved snippet")).toBe(true);
+  });
+
+  it("does not throw on pathological/deeply-nested/malformed HTML (returns a boolean)", () => {
+    // The stage-1 tier-4 lesson: a cheerio parser blowup must never escape. Feed
+    // deeply-broken markup and assert we get a boolean back without throwing —
+    // returning false is fine; the point is no-throw, not a match.
+    const broken = "<div><span><<>></span><!-- verified-token alpha -->" + "<b>".repeat(2000) + "</div>";
     expect(() => htmlContainsSnippet(broken, "verified-token alpha")).not.toThrow();
-    expect(htmlContainsSnippet(broken, "verified-token alpha")).toBe(true);
+    expect(typeof htmlContainsSnippet(broken, "verified-token alpha")).toBe("boolean");
     expect(htmlContainsSnippet(broken, "token-not-present")).toBe(false);
   });
 });
