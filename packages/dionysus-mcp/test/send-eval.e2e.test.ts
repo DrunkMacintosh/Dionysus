@@ -184,8 +184,11 @@ describe("§15 stage-4d eval gate — the loop closes only when the public page 
     const { actionId } = await approvedBoundViaRealFns(A, { title: "SSRF Guard Target Announcement", body: "x" });
 
     await expect(
-      // No fetchOpts -> no seam -> safeFetch genuinely refuses the loopback target.
-      submitVerifiedSend(A, { routeActionId: actionId, postedUrl: "http://127.0.0.1:9/" }),
+      // No fetchOpts -> no seam. Default port 80 IS in safeFetch's port allow-list, so
+      // the refusal routes through the private-IP guard (assertPublicHost/isPrivateIp:
+      // "Blocked private/reserved IP literal"), NOT the port allow-list. This genuinely
+      // exercises the IP check — deleting the private-IP guard makes this assertion RED.
+      submitVerifiedSend(A, { routeActionId: actionId, postedUrl: "http://127.0.0.1/" }),
     ).rejects.toThrow(/blocked|private|ssrf/i);
 
     const a = await prisma.routeAction.findUnique({ where: { id: actionId } });
@@ -211,6 +214,11 @@ describe("§15 stage-4d eval gate — the loop closes only when the public page 
   // fetch hits) and leave every one of A's columns untouched.
   it("inv6 cross-tenant: a ghost tenant cannot submit a send for tenant A's approved action -> refused at the scoped load with zero fetch hits and zero effect on A's rows", async () => {
     const { actionId } = await approvedBoundViaRealFns(A, { title: "Tenant A Scoped Announcement Copy", body: "belongs to A" });
+    // Precondition made explicit (not just transitively implied): the target action
+    // EXISTS and is approved in tenant A — so a successful ghost submit could only be a
+    // scope-guard failure, never a missing/unknown row.
+    const target = await prisma.routeAction.findFirst({ where: { id: actionId, businessId: A.businessId } });
+    expect(target?.status).toBe("approved");
     // A page that WOULD verify for A — proves the refusal is scope, not content.
     livePage = "<html><body><h1>Tenant A Scoped Announcement Copy</h1><p>belongs to A</p></body></html>";
     const before = await prisma.routeAction.findUnique({ where: { id: actionId } });
