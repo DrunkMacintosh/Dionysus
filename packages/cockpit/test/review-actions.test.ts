@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { prisma } from "dionysus-mcp/db";
 import { persistAsset, setActionAsset } from "dionysus-mcp/tools/asset";
-import { approveDraftCore, rejectDraftCore, editDraftCore, markReviewedCore } from "../src/lib/review-actions";
+import { approveDraftCore, rejectDraftCore, editDraftCore, markReviewedCore, submitSendCore } from "../src/lib/review-actions";
 import { buildDailyDigest } from "dionysus-mcp/tools/digest";
 
 const S = { businessId: "biz_ck_actions", email: "f@example.com" };
@@ -62,5 +62,47 @@ describe("cockpit action cores (direct tests — 4a debt)", () => {
     expect((await markReviewedCore(S, digestId)).ok).toBe(true);
     expect((await markReviewedCore(S, digestId)).ok).toBe(false);
     expect((await markReviewedCore({ businessId: "biz_ck_ghost", email: "g@x.com" }, digestId)).ok).toBe(false);
+  });
+});
+
+// submitSendCore is exercised ONLY on its refusal paths (empty URL / cross-tenant /
+// wrong-status) — each throws BEFORE submitVerifiedSend touches the network, so no
+// fetch seam is needed at this tier. The verified-success path (which needs the SSRF
+// fetch seam against a localhost fixture) is deliberately owned by the dionysus-mcp
+// send suite + the Task-6 gate, not the cockpit suite.
+describe("submitSendCore refusal paths (no fetch — all throw before the network)", () => {
+  async function approvedBoundDraft(body: string): Promise<string> {
+    const id = await freshDraft(body);
+    await prisma.routeAction.update({ where: { id }, data: { status: "approved" } });
+    return id;
+  }
+
+  it("empty URL: friendly ok=false refusal BEFORE any call, no DB effect", async () => {
+    const id = await approvedBoundDraft("ready to send");
+    const res = await submitSendCore(S, id, "   ");
+    expect(res.ok).toBe(false);
+    expect(res.message.length).toBeGreaterThan(0);
+    const row = await prisma.routeAction.findUnique({ where: { id } });
+    expect(row!.status).toBe("approved"); // untouched — refused before submitVerifiedSend
+    expect(row!.postedUrl).toBeNull();
+  });
+
+  it("cross-tenant id: ok=false with a not-found/scope message; victim untouched", async () => {
+    const id = await approvedBoundDraft("victim action");
+    const res = await submitSendCore({ businessId: "biz_ck_ghost", email: "g@x.com" }, id, "https://example.com/post");
+    expect(res.ok).toBe(false);
+    expect(res.message).toMatch(/not found|scope/i);
+    const row = await prisma.routeAction.findUnique({ where: { id } });
+    expect(row!.status).toBe("approved");
+    expect(row!.postedUrl).toBeNull();
+  });
+
+  it("proposed (not-yet-approved) action: ok=false with an invalid-transition message", async () => {
+    const id = await freshDraft("still proposed");
+    const res = await submitSendCore(S, id, "https://example.com/post");
+    expect(res.ok).toBe(false);
+    expect(res.message).toMatch(/invalid transition/i);
+    const row = await prisma.routeAction.findUnique({ where: { id } });
+    expect(row!.status).toBe("proposed");
   });
 });

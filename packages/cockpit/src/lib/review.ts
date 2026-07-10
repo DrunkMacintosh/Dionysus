@@ -53,6 +53,92 @@ export async function listProposedDrafts(identity: Identity): Promise<DraftCard[
   return cards;
 }
 
+// ---------------------------------------------------------------------------
+// Send queue reads (Task 5). listSendQueue = "copy the approved content, paste
+// the public URL" cards for approved/executing bound actions; listExecuted =
+// the verified-history section. Content is parsed defensively (the parsed-null
+// lesson) so a malformed asset renders as nulls instead of throwing.
+// ---------------------------------------------------------------------------
+export type SendCard = {
+  actionId: string; channel: string | null; title: string | null; body: string | null;
+  waypointTitle: string; status: "approved" | "executing"; postedUrl: string | null;
+};
+
+export async function listSendQueue(identity: Identity): Promise<SendCard[]> {
+  const actions = await prisma.routeAction.findMany({
+    where: { businessId: identity.businessId, status: { in: ["approved", "executing"] }, assetId: { not: null } },
+    orderBy: { createdAt: "asc" },
+  });
+  const cards: SendCard[] = [];
+  for (const action of actions) {
+    const asset = await prisma.asset.findFirst({ where: { id: action.assetId!, businessId: identity.businessId } });
+    if (!asset) continue; // dangling pointer: nothing to copy, not sendable
+    const wp = await prisma.routeWaypoint.findFirst({ where: { id: action.waypointId, businessId: identity.businessId } });
+    let title: string | null = null;
+    let body: string | null = null;
+    try {
+      const content = JSON.parse(asset.contentJson) as { title?: unknown; body?: unknown };
+      title = typeof content.title === "string" ? content.title : null;
+      body = typeof content.body === "string" ? content.body : null;
+    } catch {
+      body = null;
+    }
+    cards.push({
+      actionId: action.id, channel: asset.channel, title, body,
+      waypointTitle: wp?.title ?? "", status: action.status as "approved" | "executing",
+      postedUrl: action.postedUrl,
+    });
+  }
+  return cards;
+}
+
+export type ExecutedCard = {
+  actionId: string; channel: string | null; title: string | null;
+  postedUrl: string | null; verifiedAt: Date | null; outcome: string | null;
+};
+
+export async function listExecuted(identity: Identity): Promise<ExecutedCard[]> {
+  const actions = await prisma.routeAction.findMany({
+    where: { businessId: identity.businessId, status: "executed" },
+    orderBy: { createdAt: "desc" }, // newest first
+  });
+  const cards: ExecutedCard[] = [];
+  for (const action of actions) {
+    let channel: string | null = null;
+    let title: string | null = null;
+    if (action.assetId) {
+      const asset = await prisma.asset.findFirst({ where: { id: action.assetId, businessId: identity.businessId } });
+      if (asset) {
+        channel = asset.channel;
+        try {
+          const content = JSON.parse(asset.contentJson) as { title?: unknown };
+          title = typeof content.title === "string" ? content.title : null;
+        } catch {
+          title = null;
+        }
+      }
+    }
+    cards.push({
+      actionId: action.id, channel, title,
+      postedUrl: action.postedUrl, verifiedAt: action.verifiedAt, outcome: action.outcome,
+    });
+  }
+  return cards;
+}
+
+// Render-time href guard for the verified-history link: postedUrl is FOUNDER-entered,
+// so it becomes an <a href> ONLY when it parses as http(s). This blocks a stored
+// javascript:/data: href (a stored-XSS vector) — such values render as plain text.
+export function isRenderableHttpUrl(value: string | null | undefined): boolean {
+  if (!value) return false;
+  try {
+    const u = new URL(value);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export type RouteOverview = {
   objective: { kind: string; target: string; metric: string; status: string } | null;
   waypoints: Array<{ order: number; title: string; goal: string; status: string;
