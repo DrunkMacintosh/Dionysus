@@ -82,6 +82,8 @@ describe("§15 stage-4b eval gate — D22 under attack", () => {
     // digest). Assert both that GHOST's build stays empty AND that this fresh A draft is untouched.
     const unbatchedA = await freshDraft("still mine, ghost");
     const ghostBuild = await buildDailyDigest(GHOST, "2026-07-20");
+    // NOTE: itemCount counts only GHOST's own swept rows, so it stays 0 even under an unscoped
+    // batch write — the REAL leak detector is the `unbatchedRow.digestId` still-null check below.
     expect(ghostBuild.itemCount).toBe(0); // A's drafts never leak into GHOST's digest
     expect(ghostBuild.digestId).not.toBe(first.digestId);
     const unbatchedRow = await prisma.routeAction.findUnique({ where: { id: unbatchedA } });
@@ -91,13 +93,18 @@ describe("§15 stage-4b eval gate — D22 under attack", () => {
 
   it("cumulative edit distance survives the full review flow (the D22 churn metric is real)", async () => {
     const id = await freshDraft("v1");
-    await editDraftCore(S, id, "v22");
-    await editDraftCore(S, id, "v333");
+    await editDraftCore(S, id, "v22");  // levenshtein "v1"->"v22"   = 2
+    await editDraftCore(S, id, "v333"); // levenshtein "v22"->"v333" = 3
     const row = await prisma.routeAction.findUnique({ where: { id } });
-    expect(row!.editDistance).toBeGreaterThanOrEqual(2); // two real edits accumulated
+    // exact value pins CUMULATIVE accumulation — a last-write-wins bug would store 3 and fail.
+    expect(row!.editDistance).toBe(5); // 2 + 3, hand-verified (levenshtein is pure)
     const digest = await buildDailyDigest(S, "2026-07-21");
     expect((await markReviewedCore(S, digest.digestId)).ok).toBe(true);
     expect((await markReviewedCore(S, digest.digestId)).ok).toBe(false); // single stamp
+    // Re-read AFTER the digest build + review stamp: the churn counter must SURVIVE the full flow.
+    // A digest build (or review stamp) that wiped editDistance would be caught HERE, not before.
+    const afterFlow = await prisma.routeAction.findUnique({ where: { id } });
+    expect(afterFlow!.editDistance).toBe(5); // still 5 — cumulative churn is durable across the review flow
   });
 
   it("cross-tenant review is refused on a FRESH, unreviewed digest — and the ghost's refused probe does not consume S's single stamp", async () => {
