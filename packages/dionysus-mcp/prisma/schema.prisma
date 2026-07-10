@@ -244,6 +244,7 @@ model MemoryNode {
   tainted    Boolean  @default(false)
   createdAt  DateTime @default(now())
 
+  @@unique([businessId, type, sourceId])
   @@index([businessId])
 }
 
@@ -256,5 +257,8 @@ model MemoryEdge {
   kind       String   // next|caused|informed-by|supersedes|references
   createdAt  DateTime @default(now())
 
+  @@unique([businessId, fromId, toId, kind])
   @@index([businessId])
+  @@index([fromId])
+  @@index([toId])
 }

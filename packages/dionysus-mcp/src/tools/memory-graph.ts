@@ -1,5 +1,11 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import type { Identity } from "../identity.js";
+
+/** True for a Prisma unique-constraint violation (P2002) — the concurrent-writer race we re-find on. */
+function isUniqueViolation(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+}
 
 export const MEMORY_NODE_TYPES = ["waypoint", "action", "outcome", "learning", "market-observation", "case", "revision"] as const;
 export const MEMORY_EDGE_KINDS = ["next", "caused", "informed-by", "supersedes", "references"] as const;
@@ -29,21 +35,38 @@ export async function persistMemoryEdge(identity: Identity, input: MemoryEdgeInp
   if (!from) throw new Error(`Edge fromId ${input.fromId} not found in this business scope.`);
   const to = await prisma.memoryNode.findFirst({ where: { id: input.toId, businessId: identity.businessId } });
   if (!to) throw new Error(`Edge toId ${input.toId} not found in this business scope.`);
-  const existing = await prisma.memoryEdge.findFirst({
-    where: { businessId: identity.businessId, fromId: input.fromId, toId: input.toId, kind: input.kind } });
+  const dedupWhere = { businessId: identity.businessId, fromId: input.fromId, toId: input.toId, kind: input.kind };
+  const existing = await prisma.memoryEdge.findFirst({ where: dedupWhere });
   if (existing) return { edgeId: existing.id };
-  const row = await prisma.memoryEdge.create({ data: {
-    businessId: identity.businessId, fromId: input.fromId, toId: input.toId, kind: input.kind } });
-  return { edgeId: row.id };
+  try {
+    const row = await prisma.memoryEdge.create({ data: dedupWhere });
+    return { edgeId: row.id };
+  } catch (error: unknown) {
+    // Concurrency: a racing writer inserted the same (businessId, fromId, toId, kind) first — re-find it.
+    if (isUniqueViolation(error)) {
+      const row = await prisma.memoryEdge.findFirst({ where: dedupWhere });
+      if (row) return { edgeId: row.id };
+    }
+    throw error;
+  }
 }
 
 /** Find-or-create a mirror node keyed by (businessId, type, sourceId) — the idempotency primitive for the plan mirror. */
 async function findOrCreateMirrorNode(identity: Identity, input: MemoryNodeInput & { sourceId: string }): Promise<string> {
-  const existing = await prisma.memoryNode.findFirst({
-    where: { businessId: identity.businessId, type: input.type, sourceId: input.sourceId } });
+  const dedupWhere = { businessId: identity.businessId, type: input.type, sourceId: input.sourceId };
+  const existing = await prisma.memoryNode.findFirst({ where: dedupWhere });
   if (existing) return existing.id;
-  const { nodeId } = await persistMemoryNode(identity, input);
-  return nodeId;
+  try {
+    const { nodeId } = await persistMemoryNode(identity, input);
+    return nodeId;
+  } catch (error: unknown) {
+    // Concurrency: a racing mirror inserted the same (businessId, type, sourceId) first — re-find it.
+    if (isUniqueViolation(error)) {
+      const row = await prisma.memoryNode.findFirst({ where: dedupWhere });
+      if (row) return row.id;
+    }
+    throw error;
+  }
 }
 
 /**

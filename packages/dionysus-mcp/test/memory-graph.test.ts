@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll } from "vitest";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../src/db.js";
 import { persistMemoryNode, persistMemoryEdge, mirrorPlanToGraph } from "../src/tools/memory-graph.js";
 import { createObjective, persistRoute, persistWaypoint, upsertRouteAction } from "../src/tools/plan.js";
@@ -192,5 +193,57 @@ describe("mirrorPlanToGraph — §13 plan mirror (waypoint spine + action refere
 
   it("rejects a cross-tenant route load (route not in the caller's business)", async () => {
     await expect(mirrorPlanToGraph(B, routeId, NOW)).rejects.toThrow(/not found|scope/i);
+  });
+});
+
+describe("graph writers are concurrency-safe (5a precondition)", () => {
+  const B = "biz_mgconc";
+  beforeAll(async () => {
+    await prisma.memoryEdge.deleteMany({ where: { businessId: B } });
+    await prisma.memoryNode.deleteMany({ where: { businessId: B } });
+    await prisma.business.upsert({ where: { id: B }, create: { id: B, name: "C" }, update: {} });
+  });
+
+  it("two concurrent find-or-create for the same (type, sourceId) yield ONE node", async () => {
+    // exercise the exported mirror path concurrently on a fresh route
+    const obj = await prisma.objective.create({ data: { businessId: B, kind: "k", target: "1", metric: "m", status: "active" } });
+    const route = await prisma.route.create({ data: { businessId: B, objectiveId: obj.id, source: "case", status: "proposed" } });
+    await prisma.routeWaypoint.create({ data: { businessId: B, routeId: route.id, order: 1, title: "t", goal: "g", status: "active" } });
+    const [a, b] = await Promise.allSettled([
+      mirrorPlanToGraph({ businessId: B }, route.id, new Date()),
+      mirrorPlanToGraph({ businessId: B }, route.id, new Date()),
+    ]);
+    expect(a.status).toBe("fulfilled");
+    expect(b.status).toBe("fulfilled");
+    // exactly one waypoint node despite two concurrent mirrors
+    const wpNodes = await prisma.memoryNode.findMany({ where: { businessId: B, type: "waypoint" } });
+    expect(wpNodes).toHaveLength(1);
+  });
+
+  it("raw duplicate (businessId,type,sourceId) is rejected by @@unique; find-or-create returns the existing id", async () => {
+    // Deterministic proof of the DB constraint (SQLite single-writer may not force the race above):
+    // seed a fresh route+waypoint, mirror once, then attempt a raw create with the SAME dedup key.
+    const obj = await prisma.objective.create({ data: { businessId: B, kind: "k", target: "1", metric: "m", status: "active" } });
+    const route = await prisma.route.create({ data: { businessId: B, objectiveId: obj.id, source: "case", status: "proposed" } });
+    const wp = await prisma.routeWaypoint.create({ data: { businessId: B, routeId: route.id, order: 1, title: "t2", goal: "g2", status: "active" } });
+    const first = await mirrorPlanToGraph({ businessId: B }, route.id, new Date());
+    const nodeId = first.waypointNodeIds[0];
+
+    // Raw create with the same (businessId, type, sourceId) must be rejected by the @@unique index.
+    await expect(
+      prisma.memoryNode.create({ data: { businessId: B, type: "waypoint", title: "dup", body: "b", confidence: 1, sourceId: wp.id } }),
+    ).rejects.toMatchObject({ code: "P2002" });
+
+    // find-or-create (re-mirror) returns the SAME existing id and adds zero rows for this key.
+    const again = await mirrorPlanToGraph({ businessId: B }, route.id, new Date());
+    expect(again.waypointNodeIds[0]).toBe(nodeId);
+    const wpNodesForKey = await prisma.memoryNode.findMany({ where: { businessId: B, type: "waypoint", sourceId: wp.id } });
+    expect(wpNodesForKey).toHaveLength(1);
+  });
+
+  it("multiple sourceId-NULL nodes still coexist (unique treats NULLs as distinct)", async () => {
+    const n1 = await prisma.memoryNode.create({ data: { businessId: B, type: "market-observation", title: "o1", body: "b", confidence: 0.5 } });
+    const n2 = await prisma.memoryNode.create({ data: { businessId: B, type: "market-observation", title: "o2", body: "b", confidence: 0.5 } });
+    expect(n1.id).not.toBe(n2.id);
   });
 });
