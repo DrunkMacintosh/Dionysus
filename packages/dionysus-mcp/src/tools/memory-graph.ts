@@ -152,7 +152,7 @@ export async function mirrorPlanToGraph(
 export type AgentContext = {
   ancestorPath: Array<{ title: string; goal: string }>;                                 // waypoints head→anchor (incl.), in `next`-spine order
   neighborhood: Array<{ kind: "action" | "outcome"; title: string; detail: string }>;   // the anchor waypoint's actions + their `caused` outcomes, capped
-  learnings: Array<{ title: string; body: string; confidence: number }>;                // role-scoped `learning` nodes (none at 5b — forward-compatible)
+  learnings: Array<{ title: string; body: string; confidence: number }>;                // role-scoped, non-superseded `learning` craft beliefs (5c), by confidence
   text: string;                                                                          // bounded prompt rendering (capped by maxItems)
 };
 
@@ -173,8 +173,9 @@ const DEFAULT_MAX_ITEMS = 12;
  * anchor waypoint's `action` nodes plus the `outcome` nodes they `caused` (edge traversal), capped at
  * `maxItems`. `text` renders the path (anchor marked "(current)") + the capped "Done" facts, so
  * maxItems bounds BOTH the item list and the prompt string. A sparse/empty graph (route exists but was
- * never mirrored) degrades to an all-empty context — NO throw. `learnings` are role-scoped `learning`
- * nodes; NONE exist at 5b (the belief layer lands in 5c), so this stays forward-compatible and empty.
+ * never mirrored) degrades to an all-empty context — NO throw. `learnings` are the role-scoped, LIVE
+ * (non-superseded) `learning` craft beliefs (5c) ordered by confidence, rendered in `text` as LABELED
+ * hypotheses ("what I've learned so far") — never a fact/metric; empty when the role has no beliefs yet.
  */
 export async function buildAgentContext(
   identity: Identity,
