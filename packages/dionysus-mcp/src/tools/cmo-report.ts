@@ -1,6 +1,7 @@
 import { prisma } from "../db.js";
 import type { Identity } from "../identity.js";
 import { gradeObjective, STALL_WEEKS, type ObjectiveStats, type Verdict } from "../lib/cmo-verdict.js";
+import { getConnectedAnalytics } from "./integration.js";
 import { listObservations } from "./memory.js";
 
 // ---------------------------------------------------------------------------
@@ -14,10 +15,12 @@ import { listObservations } from "./memory.js";
 // is derived from `now`, never from wall-clock, so the report is deterministic
 // and testable with a fixed clock + backdated rows.
 //
-// HONESTY (§3 / D21): at 4f `analyticsConnected` is hardcoded false, so the
-// grader's measured branch is unreachable and every verdict is an unmeasured
-// state that LEADS with the measurement gap. The report never claims the
-// objective's metric moved.
+// HONESTY (§3 / D21): `analyticsConnected` reflects a REAL connected analytics
+// Integration and `metricDeltaPct` is derived ONLY from real MetricSnapshot rows,
+// so the grader's measured branch is reachable ONLY with a genuine connection and
+// two genuine readings. With no connection (or fewer than two readings) the verdict
+// stays an unmeasured state that LEADS with the measurement gap and never claims
+// the objective's metric moved.
 // ---------------------------------------------------------------------------
 
 export type CmoReport = {
@@ -35,7 +38,7 @@ export type CmoReport = {
   radarNoticed: Array<{ title: string; sourceUrl: string | null; confidence: number }>; // observations in the last 7d
   churnThisWeek: number; // sum of editDistance on actions touched this week (D22)
   verdict: Verdict; // from gradeObjective
-  analyticsConnected: boolean; // false at 4f
+  analyticsConnected: boolean; // true when a real analytics Integration is connected
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -141,9 +144,22 @@ export async function buildCmoReport(identity: Identity, now: Date): Promise<Cmo
   });
   const churnThisWeek = churn._sum.editDistance ?? 0;
 
-  // §3 honesty seam: analytics is stage 5. Hardcoded false here.
-  // TODO stage-5: analyticsConnected = (count(Integration where kind=analytics) > 0).
-  const analyticsConnected = false;
+  // §3 / D21: analytics is REAL now. analyticsConnected reflects a connected analytics
+  // Integration; metricDeltaPct is computed ONLY from real MetricSnapshot rows (baseline at/
+  // after the route start vs the latest) — never fabricated. No connection, or fewer than two
+  // real readings, leaves metricDeltaPct undefined → the grader stays on an unmeasured verdict.
+  const connected = await getConnectedAnalytics(identity);
+  const analyticsConnected = connected !== null;
+  let metricDeltaPct: number | undefined;
+  if (connected && earliestRoute) {
+    const snapshots = await prisma.metricSnapshot.findMany({
+      where: { businessId, metric: connected.metric }, orderBy: { capturedAt: "asc" } });
+    const baseline = snapshots.find((s) => s.capturedAt >= earliestRoute.createdAt) ?? snapshots[0];
+    const latest = snapshots.length ? snapshots[snapshots.length - 1] : undefined;
+    if (baseline && latest && baseline.id !== latest.id && baseline.value > 0) {
+      metricDeltaPct = Math.round(((latest.value - baseline.value) / baseline.value) * 100);
+    }
+  }
 
   const stats: ObjectiveStats = {
     weeksActive,
@@ -153,7 +169,7 @@ export async function buildCmoReport(identity: Identity, now: Date): Promise<Cmo
     inFlight,
     proposedPending,
     analyticsConnected,
-    // metricDeltaPct stays undefined at 4f — no connected source to measure a delta.
+    metricDeltaPct,
   };
   const verdict = applyMetricName(gradeObjective(stats), objectiveRow?.metric ?? null);
 

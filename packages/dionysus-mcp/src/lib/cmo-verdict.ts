@@ -94,7 +94,7 @@ export function gradeObjective(stats: ObjectiveStats): Verdict {
         state: "measured-working",
         headline: `Your number is up ${metricDeltaPct}% since this objective's work went live.`,
         recommendation:
-          "Keep the current route — it is moving the metric. Double down on what shipped.",
+          "Your number rose while this work was live — attribution isn't proven at this scale, but it's worth doubling down on what shipped and watching whether the trend holds.",
         claimsMetricMoved: true,
       };
     }

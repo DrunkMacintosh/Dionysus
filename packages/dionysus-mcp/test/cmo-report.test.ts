@@ -1,6 +1,8 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import { prisma } from "../src/db.js";
 import { buildCmoReport } from "../src/tools/cmo-report.js";
+import { CONFIG_KEY_ENV } from "../src/lib/secret-box.js";
+import { connectIntegration } from "../src/tools/integration.js";
 
 // A FIXED clock. Every window in buildCmoReport is computed from this `now`,
 // never from wall-clock, so the fixture backdates createdAt/verifiedAt relative
@@ -179,5 +181,64 @@ describe("buildCmoReport — identity-scoped weekly assembly (§3/D21/D31)", () 
     const biz = await buildCmoReport({ businessId: BIZ }, NOW);
     expect(biz.whatRan).toHaveLength(2);
     expect(biz.whatRan.map((w) => w.title)).not.toContain("Other tweet");
+  });
+});
+
+describe("buildCmoReport measured (5d)", () => {
+  const M = { businessId: "biz_cmo_measured" };
+  const NOW = new Date("2026-07-11T00:00:00.000Z");
+  const weeksAgo = (n: number) => new Date(NOW.getTime() - n * 7 * 24 * 60 * 60 * 1000);
+
+  beforeAll(() => { process.env[CONFIG_KEY_ENV] = Buffer.from("0123456789abcdef0123456789abcdef").toString("base64"); });
+
+  beforeEach(async () => {
+    await prisma.metricSnapshot.deleteMany({ where: { businessId: M.businessId } });
+    await prisma.integration.deleteMany({ where: { businessId: M.businessId } });
+    await prisma.routeAction.deleteMany({ where: { businessId: M.businessId } });
+    await prisma.routeWaypoint.deleteMany({ where: { businessId: M.businessId } });
+    await prisma.route.deleteMany({ where: { businessId: M.businessId } });
+    await prisma.objective.deleteMany({ where: { businessId: M.businessId } });
+    await prisma.business.upsert({ where: { id: M.businessId }, create: { id: M.businessId, name: M.businessId }, update: {} });
+    const obj = await prisma.objective.create({ data: { businessId: M.businessId, kind: "growth", target: "100 signups", metric: "signups", status: "active" } });
+    const route = await prisma.route.create({ data: { businessId: M.businessId, objectiveId: obj.id, source: "composed", status: "active", createdAt: weeksAgo(6) } });
+    const wp = await prisma.routeWaypoint.create({ data: { businessId: M.businessId, routeId: route.id, order: 1, title: "W", goal: "g", status: "active" } });
+    await prisma.routeAction.create({ data: { businessId: M.businessId, waypointId: wp.id, employeeRole: "copywriter", type: "post", status: "executed", verifiedAt: weeksAgo(1) } });
+  });
+
+  it("stays UNMEASURED (no metric-move claim) when no analytics source is connected", async () => {
+    const report = await buildCmoReport(M, NOW);
+    expect(report.analyticsConnected).toBe(false);
+    expect(report.verdict.claimsMetricMoved).toBe(false);
+    expect(report.verdict.state).not.toMatch(/^measured/);
+  });
+
+  it("reports MEASURED-WORKING with a REAL positive delta from real snapshots", async () => {
+    const { integrationId } = await connectIntegration(M, { kind: "analytics", provider: "http-json", metric: "signups", config: { endpoint: "https://x", apiKey: "k" } });
+    await prisma.metricSnapshot.create({ data: { businessId: M.businessId, integrationId, metric: "signups", value: 100, capturedAt: weeksAgo(6) } });
+    await prisma.metricSnapshot.create({ data: { businessId: M.businessId, integrationId, metric: "signups", value: 130, capturedAt: weeksAgo(0) } });
+
+    const report = await buildCmoReport(M, NOW);
+    expect(report.analyticsConnected).toBe(true);
+    expect(report.verdict.state).toBe("measured-working");
+    expect(report.verdict.claimsMetricMoved).toBe(true);
+    expect(report.verdict.headline).toContain("30");
+    expect(report.verdict.recommendation.toLowerCase()).toContain("attribution");
+  });
+
+  it("reports MEASURED-FLAT when connected but the real delta is not positive", async () => {
+    const { integrationId } = await connectIntegration(M, { kind: "analytics", provider: "http-json", metric: "signups", config: { endpoint: "https://x" } });
+    await prisma.metricSnapshot.create({ data: { businessId: M.businessId, integrationId, metric: "signups", value: 100, capturedAt: weeksAgo(6) } });
+    await prisma.metricSnapshot.create({ data: { businessId: M.businessId, integrationId, metric: "signups", value: 100, capturedAt: weeksAgo(0) } });
+    const report = await buildCmoReport(M, NOW);
+    expect(report.verdict.state).toBe("measured-flat");
+    expect(report.verdict.claimsMetricMoved).toBe(false);
+  });
+
+  it("stays unmeasured when connected but only ONE snapshot exists (no delta computable — no fabrication)", async () => {
+    const { integrationId } = await connectIntegration(M, { kind: "analytics", provider: "http-json", metric: "signups", config: { endpoint: "https://x" } });
+    await prisma.metricSnapshot.create({ data: { businessId: M.businessId, integrationId, metric: "signups", value: 100, capturedAt: weeksAgo(0) } });
+    const report = await buildCmoReport(M, NOW);
+    expect(report.analyticsConnected).toBe(true);
+    expect(report.verdict.claimsMetricMoved).toBe(false);
   });
 });
