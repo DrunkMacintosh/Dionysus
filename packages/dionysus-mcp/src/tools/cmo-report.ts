@@ -146,15 +146,17 @@ export async function buildCmoReport(identity: Identity, now: Date): Promise<Cmo
 
   // §3 / D21: analytics is REAL now. analyticsConnected reflects a connected analytics
   // Integration; metricDeltaPct is computed ONLY from real MetricSnapshot rows (baseline at/
-  // after the route start vs the latest) — never fabricated. No connection, or fewer than two
-  // real readings, leaves metricDeltaPct undefined → the grader stays on an unmeasured verdict.
+  // after the route start vs the latest) — never fabricated. No connection, fewer than two
+  // real readings, OR no snapshot at/after the route start leaves metricDeltaPct undefined →
+  // the grader stays on an unmeasured verdict. There is NO pre-route fallback baseline: if the
+  // only readings predate the work, we cannot honestly claim a rise "since work went live".
   const connected = await getConnectedAnalytics(identity);
   const analyticsConnected = connected !== null;
   let metricDeltaPct: number | undefined;
   if (connected && earliestRoute) {
     const snapshots = await prisma.metricSnapshot.findMany({
       where: { businessId, metric: connected.metric }, orderBy: { capturedAt: "asc" } });
-    const baseline = snapshots.find((s) => s.capturedAt >= earliestRoute.createdAt) ?? snapshots[0];
+    const baseline = snapshots.find((s) => s.capturedAt >= earliestRoute.createdAt);
     const latest = snapshots.length ? snapshots[snapshots.length - 1] : undefined;
     if (baseline && latest && baseline.id !== latest.id && baseline.value > 0) {
       metricDeltaPct = Math.round(((latest.value - baseline.value) / baseline.value) * 100);

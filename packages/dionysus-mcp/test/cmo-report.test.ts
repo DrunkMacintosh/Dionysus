@@ -241,4 +241,14 @@ describe("buildCmoReport measured (5d)", () => {
     expect(report.analyticsConnected).toBe(true);
     expect(report.verdict.claimsMetricMoved).toBe(false);
   });
+
+  it("stays UNMEASURED when all snapshots predate the route start (no false 'since work went live')", async () => {
+    const { integrationId } = await connectIntegration(M, { kind: "analytics", provider: "http-json", metric: "signups", config: { endpoint: "https://x" } });
+    await prisma.metricSnapshot.create({ data: { businessId: M.businessId, integrationId, metric: "signups", value: 100, capturedAt: weeksAgo(10) } });
+    await prisma.metricSnapshot.create({ data: { businessId: M.businessId, integrationId, metric: "signups", value: 200, capturedAt: weeksAgo(8) } });
+    const report = await buildCmoReport(M, NOW);
+    expect(report.analyticsConnected).toBe(true);
+    expect(report.verdict.claimsMetricMoved).toBe(false); // pre-route movement is never claimed as "since work went live"
+    expect(report.verdict.state).not.toBe("measured-working");
+  });
 });
