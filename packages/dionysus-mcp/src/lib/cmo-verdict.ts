@@ -4,9 +4,10 @@
  * The report NEVER claims the objective's metric moved unless a real analytics
  * integration is connected. `claimsMetricMoved` is the machine-checkable hook for
  * that invariant: it is TRUE only for the `measured-working` state, which is only
- * reachable when `analyticsConnected === true` (stage 5). At 4f analytics is always
- * disconnected, so every verdict is one of the unmeasured states, each of which
- * LEADS its headline with the truth (the gap, the flat weeks, or the progress).
+ * reachable when `analyticsConnected === true` AND a real positive `metricDeltaPct`
+ * is present (5d). Without a connected analytics source (or without real snapshot
+ * data), every verdict is an unmeasured state that LEADS its headline with the truth
+ * (the gap, the flat weeks, or the progress).
  *
  * HONESTY INVARIANT (the eval-gate core):
  *   claimsMetricMoved === true  ⟹  state === "measured-working"  ⟹  analyticsConnected === true
@@ -28,8 +29,8 @@ export type ObjectiveStats = {
   executedThisWeek: number; // verified sends in the last 7 days
   inFlight: number; // approved + executing
   proposedPending: number; // proposed drafts awaiting review
-  analyticsConnected: boolean; // 4f: always false
-  metricDeltaPct?: number; // stage 5 only: measured % change in the objective metric
+  analyticsConnected: boolean; // 5d: true when a real analytics Integration is connected
+  metricDeltaPct?: number; // 5d: measured % change from real snapshots; undefined when not computable
 };
 
 export type VerdictState =

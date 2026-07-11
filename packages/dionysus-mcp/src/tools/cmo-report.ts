@@ -65,10 +65,10 @@ function parseTitle(json: string): string | null {
 /**
  * Post-substitute the objective's metric NAME into the verdict headline IF the
  * grader left an explicit `{metric}` placeholder. The current grader is
- * metric-agnostic ("your number") and emits no placeholder, so this is a
- * pass-through at 4f — it exists so a future (stage-5) headline can be
- * personalised WITHOUT this code ever fabricating a metric MOVE. Immutable:
- * returns a new verdict, never mutates the grader's output.
+ * metric-agnostic ("your number") and emits no placeholder, so this stays a
+ * pass-through — it exists so a headline can be personalised WITHOUT this code
+ * ever fabricating a metric MOVE. Immutable: returns a new verdict, never
+ * mutates the grader's output.
  */
 function applyMetricName(verdict: Verdict, metric: string | null): Verdict {
   if (!metric || !verdict.headline.includes("{metric}")) return verdict;
