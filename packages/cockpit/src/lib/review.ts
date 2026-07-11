@@ -5,9 +5,11 @@ import { listObservations } from "dionysus-mcp/tools/memory";
 import { buildCmoReport, type CmoReport } from "dionysus-mcp/tools/cmo-report";
 import { mirrorPlanToGraph } from "dionysus-mcp/tools/memory-graph";
 import { listCraftBeliefs, type CraftBeliefView } from "dionysus-mcp/tools/belief-graph";
+import { listIntegrations, type ConnectedIntegration } from "dionysus-mcp/tools/integration";
 
 export type { CmoReport };
 export type { CraftBeliefView };
+export type { ConnectedIntegration };
 
 // ---------------------------------------------------------------------------
 // CMO report (Task 3) — the read behind the progress-to-objective home. This is
@@ -210,6 +212,17 @@ export async function listRadarObservations(identity: Identity, limit = 20): Pro
 // ---------------------------------------------------------------------------
 export async function getCraftBeliefs(identity: Identity, limit = 50): Promise<CraftBeliefView[]> {
   return listCraftBeliefs(identity, { limit });
+}
+
+// ---------------------------------------------------------------------------
+// getIntegrations (Task 6, stage 5d) — the read behind the "/connect" page. A thin,
+// identity-scoped wrapper over the mcp listIntegrations returning the config-FREE
+// ConnectedIntegration view: the stored secret (configEnc) NEVER surfaces here, and
+// another tenant's integration is scoped out. Identity is a PARAMETER (cockpit
+// convention — the page calls requireSession and passes it). NOT an MCP tool.
+// ---------------------------------------------------------------------------
+export async function getIntegrations(identity: Identity): Promise<ConnectedIntegration[]> {
+  return listIntegrations(identity);
 }
 
 // ---------------------------------------------------------------------------

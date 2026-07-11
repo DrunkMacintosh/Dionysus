@@ -1,12 +1,14 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import { prisma } from "dionysus-mcp/db";
 import { persistAsset, setActionAsset } from "dionysus-mcp/tools/asset";
 import { recordSimulation } from "dionysus-mcp/tools/simulation";
 import { recordObservation } from "dionysus-mcp/tools/memory";
 import { createObjective, persistRoute, persistWaypoint, upsertRouteAction } from "dionysus-mcp/tools/plan";
 import { approveAction, startExecution, completeExecution } from "dionysus-mcp/tools/lifecycle";
-import { listProposedDrafts, getRouteOverview, getDigestHeader, listSendQueue, listExecuted, isRenderableHttpUrl, listRadarObservations, getCmoReport, getTimeline, getCraftBeliefs } from "../src/lib/review";
+import { listProposedDrafts, getRouteOverview, getDigestHeader, listSendQueue, listExecuted, isRenderableHttpUrl, listRadarObservations, getCmoReport, getTimeline, getCraftBeliefs, getIntegrations } from "../src/lib/review";
 import { persistCraftBelief } from "dionysus-mcp/tools/belief-graph";
+import { connectIntegration } from "dionysus-mcp/tools/integration";
+import { CONFIG_KEY_ENV } from "dionysus-mcp/lib/secret-box";
 
 const A = { businessId: "biz_cockpit_rev" };
 const B = { businessId: "biz_cockpit_rev_other" };
@@ -439,5 +441,29 @@ describe("getCraftBeliefs", () => {
     const beliefs = await getCraftBeliefs(A);
     expect(beliefs.map((b) => b.body)).toContain("Tends to approve (5 accepted as-is, 0 rejected).");
     expect(beliefs.some((b) => b.body === "other tenant belief")).toBe(false); // B is scoped out
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Integrations service (getIntegrations) — the read behind the "/connect" page.
+// A thin, identity-scoped wrapper over the mcp listIntegrations returning the
+// config-FREE ConnectedIntegration view: the stored secret (configEnc) never
+// surfaces, and another tenant's integration is scoped out.
+// ---------------------------------------------------------------------------
+describe("getIntegrations", () => {
+  beforeAll(() => { process.env[CONFIG_KEY_ENV] = Buffer.from("0123456789abcdef0123456789abcdef").toString("base64"); });
+  beforeEach(async () => {
+    await prisma.integration.deleteMany({ where: { businessId: A.businessId } });
+    await prisma.integration.deleteMany({ where: { businessId: B.businessId } });
+  });
+
+  it("returns the identity's integrations WITHOUT any config, scoped — another tenant's is excluded", async () => {
+    await connectIntegration(A, { kind: "analytics", provider: "http-json", metric: "signups", config: { apiKey: "sekret" } });
+    await connectIntegration(B, { kind: "analytics", provider: "http-json", metric: "x", config: { apiKey: "other" } });
+    const list = await getIntegrations(A);
+    expect(list).toHaveLength(1);
+    expect(list[0]).not.toHaveProperty("configEnc");
+    expect(JSON.stringify(list)).not.toContain("sekret"); // config never surfaces
+    expect(list.some((i) => i.metric === "x")).toBe(false); // B scoped out
   });
 });
