@@ -28,6 +28,8 @@ model Business {
   simulations     SimulationResult[]
   memoryNodes     MemoryNode[]
   memoryEdges     MemoryEdge[]
+  integrations    Integration[]
+  metricSnapshots MetricSnapshot[]
 }
 
 model Product {
@@ -262,4 +264,31 @@ model MemoryEdge {
   @@index([businessId])
   @@index([fromId])
   @@index([toId])
+}
+
+model Integration {
+  id         String   @id @default(cuid())
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id])
+  kind       String   // "analytics" | "platform_oauth"
+  provider   String   // e.g. "http-json" (reference), later "ga4" | "gsc" | "plausible"
+  metric     String   // the objective metric this source measures (e.g. "signups")
+  configEnc  String   // secret-box ciphertext blob (never plaintext)
+  status     String   // "connected" | "disconnected"
+  createdAt  DateTime @default(now())
+
+  @@unique([businessId, kind, provider])
+  @@index([businessId])
+}
+
+model MetricSnapshot {
+  id            String   @id @default(cuid())
+  businessId    String
+  business      Business @relation(fields: [businessId], references: [id])
+  integrationId String
+  metric        String
+  value         Float
+  capturedAt    DateTime @default(now())
+
+  @@index([businessId])
 }
