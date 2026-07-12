@@ -6,6 +6,7 @@ import { buildCmoReport, type CmoReport } from "dionysus-mcp/tools/cmo-report";
 import { mirrorPlanToGraph } from "dionysus-mcp/tools/memory-graph";
 import { listCraftBeliefs, type CraftBeliefView } from "dionysus-mcp/tools/belief-graph";
 import { listIntegrations, type ConnectedIntegration } from "dionysus-mcp/tools/integration";
+import { getPendingRevision, type PendingRevision } from "dionysus-mcp/tools/route-revision";
 
 export type { CmoReport };
 export type { CraftBeliefView };
@@ -243,7 +244,10 @@ export async function getIntegrations(identity: Identity): Promise<ConnectedInte
 // It is NOT a measured metric (measured outcomes need analytics — 5c). Null for any not-yet-live action.
 export type TimelineOutcome = { title: string; detail: string };
 export type TimelineAction = { nodeId: string; label: string; rationale: string; outcome: TimelineOutcome | null };
-export type TimelineWaypoint = { nodeId: string; title: string; goal: string; actions: TimelineAction[] };
+// Stage 6c: a founder-approved plan revision recorded under its waypoint (the `revision`
+// MemoryNode's was→now→why body). Additive on TimelineWaypoint — existing consumers ignore it.
+export type TimelineRevision = { body: string; createdAt: Date };
+export type TimelineWaypoint = { nodeId: string; title: string; goal: string; actions: TimelineAction[]; revisions: TimelineRevision[] };
 export type TimelineView = { hasRoute: boolean; waypoints: TimelineWaypoint[] };
 
 export async function getTimeline(identity: Identity): Promise<TimelineView> {
@@ -260,7 +264,16 @@ export async function getTimeline(identity: Identity): Promise<TimelineView> {
   for (const wpNodeId of waypointNodeIds) {
     const wpNode = await prisma.memoryNode.findFirst({ where: { id: wpNodeId, businessId: identity.businessId } });
     if (!wpNode) continue;
-    const wp: TimelineWaypoint = { nodeId: wpNode.id, title: wpNode.title, goal: wpNode.body, actions: [] };
+    // Stage 6c: the founder-approved revisions recorded under this waypoint (the was/now/why
+    // `revision` nodes decideRouteRevision wrote), keyed by the source RouteWaypoint id, oldest-first.
+    const revisionNodes = wpNode.waypointId
+      ? await prisma.memoryNode.findMany({
+          where: { businessId: identity.businessId, type: "revision", waypointId: wpNode.waypointId },
+          orderBy: { createdAt: "asc" } })
+      : [];
+    const wp: TimelineWaypoint = {
+      nodeId: wpNode.id, title: wpNode.title, goal: wpNode.body, actions: [],
+      revisions: revisionNodes.map((r) => ({ body: r.body, createdAt: r.createdAt })) };
     waypoints.push(wp);
     if (wpNode.waypointId) byWaypointId.set(wpNode.waypointId, wp);
   }
@@ -287,6 +300,26 @@ export async function getTimeline(identity: Identity): Promise<TimelineView> {
   }
 
   return { hasRoute: true, waypoints };
+}
+
+// ---------------------------------------------------------------------------
+// Route-revision surface (Stage 6c, Task 5) — the read behind the "/route"
+// revision card. getRoutePendingRevision finds the tenant's latest route, then
+// returns its ONE standing PROPOSED revision (the Growth Analyst's founder-gated
+// plan-change proposal) via the mcp getPendingRevision, tagged with its routeId.
+// Identity-scoped like the other cockpit reads (another tenant's revision never
+// leaks — both the route load and getPendingRevision are businessId-scoped); the
+// waypoint goal stays byte-unchanged until the founder approves. NOT an MCP tool.
+// ---------------------------------------------------------------------------
+export type PendingRevisionCard = PendingRevision & { routeId: string };
+
+export async function getRoutePendingRevision(identity: Identity): Promise<PendingRevisionCard | null> {
+  const route = await prisma.route.findFirst({
+    where: { businessId: identity.businessId }, orderBy: { createdAt: "desc" } });
+  if (!route) return null;
+  const pending = await getPendingRevision(identity, route.id);
+  if (!pending) return null;
+  return { ...pending, routeId: route.id };
 }
 
 export type DigestHeader = { digestId: string; date: string; itemCount: number; reviewedAt: Date | null; openCount: number };

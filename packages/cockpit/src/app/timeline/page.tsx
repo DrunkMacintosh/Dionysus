@@ -32,6 +32,11 @@ export default async function TimelinePage() {
               </div>
               <strong style={{ fontSize: 16 }}>{wp.title}</strong>
               <p style={{ margin: "4px 0 8px", color: "#666" }}>{wp.goal}</p>
+              {wp.revisions.map((rev, ri) => (
+                <p key={`${wp.nodeId}-rev-${ri}`} style={{ margin: "0 0 8px", color: "#6b3fb0", fontSize: 13 }}>
+                  plan revised: {rev.body}
+                </p>
+              ))}
               {wp.actions.length === 0 ? (
                 <p style={{ color: "#999", fontSize: 13 }}>No actions proposed yet.</p>
               ) : (

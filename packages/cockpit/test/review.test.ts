@@ -5,9 +5,12 @@ import { recordSimulation } from "dionysus-mcp/tools/simulation";
 import { recordObservation } from "dionysus-mcp/tools/memory";
 import { createObjective, persistRoute, persistWaypoint, upsertRouteAction } from "dionysus-mcp/tools/plan";
 import { approveAction, startExecution, completeExecution } from "dionysus-mcp/tools/lifecycle";
-import { listProposedDrafts, getRouteOverview, getDigestHeader, listSendQueue, listExecuted, isRenderableHttpUrl, listRadarObservations, getCmoReport, getTimeline, getCraftBeliefs, getIntegrations } from "../src/lib/review";
+import { listProposedDrafts, getRouteOverview, getDigestHeader, listSendQueue, listExecuted, isRenderableHttpUrl, listRadarObservations, getCmoReport, getTimeline, getCraftBeliefs, getIntegrations, getRoutePendingRevision } from "../src/lib/review";
 import { persistCraftBelief } from "dionysus-mcp/tools/belief-graph";
 import { connectIntegration } from "dionysus-mcp/tools/integration";
+import { proposeRouteRevision } from "dionysus-mcp/tools/route-revision";
+import { decideRouteRevision } from "dionysus-mcp/tools/decide-revision";
+import { mirrorPlanToGraph } from "dionysus-mcp/tools/memory-graph";
 import { CONFIG_KEY_ENV } from "dionysus-mcp/lib/secret-box";
 
 const A = { businessId: "biz_cockpit_rev" };
@@ -465,5 +468,80 @@ describe("getIntegrations", () => {
     expect(list[0]).not.toHaveProperty("configEnc");
     expect(JSON.stringify(list)).not.toContain("sekret"); // config never surfaces
     expect(list.some((i) => i.metric === "x")).toBe(false); // B scoped out
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Route-revision surface (Stage 6c, Task 5) — the read-side for the "/route"
+// revision card + the "/timeline" revisions line. getRoutePendingRevision finds
+// the tenant's latest route and returns its standing PROPOSED revision (scoped —
+// another tenant's revision never leaks); getTimeline additionally carries each
+// waypoint's `revision` MemoryNodes (the was/now/why record the approve wrote).
+// ---------------------------------------------------------------------------
+const REV = { businessId: "biz_cockpit_revision" };
+const REVO = { businessId: "biz_cockpit_revision_other" };
+
+describe("route-revision surface (getRoutePendingRevision + timeline revisions)", () => {
+  let routeId = "";
+  let lockedWpId = "";
+
+  beforeEach(async () => {
+    for (const id of [REV.businessId, REVO.businessId]) {
+      await prisma.memoryEdge.deleteMany({ where: { businessId: id } });
+      await prisma.memoryNode.deleteMany({ where: { businessId: id } });
+      await prisma.routeRevision.deleteMany({ where: { businessId: id } });
+      await prisma.routeAction.deleteMany({ where: { businessId: id } });
+      await prisma.routeWaypoint.deleteMany({ where: { businessId: id } });
+      await prisma.route.deleteMany({ where: { businessId: id } });
+      await prisma.objective.deleteMany({ where: { businessId: id } });
+      await prisma.business.upsert({ where: { id }, create: { id, name: id }, update: {} });
+    }
+    // A (REV): a route with a next LOCKED waypoint the analyst could re-personalize.
+    const obj = await prisma.objective.create({ data: { businessId: REV.businessId, kind: "growth", target: "100", metric: "signups", status: "active" } });
+    const route = await prisma.route.create({ data: { businessId: REV.businessId, objectiveId: obj.id, source: "composed", status: "active" } });
+    routeId = route.id;
+    await prisma.routeWaypoint.create({ data: { businessId: REV.businessId, routeId, order: 1, title: "Launch", goal: "go live", status: "active" } });
+    lockedWpId = (await prisma.routeWaypoint.create({ data: { businessId: REV.businessId, routeId, order: 2, title: "Grow", goal: "old goal", status: "locked" } })).id;
+
+    // B (REVO): its OWN route with its OWN standing proposed revision — so A's scoped read is
+    // NON-VACUOUS: there is a real foreign revision that must NOT leak into A's card.
+    const objB = await prisma.objective.create({ data: { businessId: REVO.businessId, kind: "growth", target: "100", metric: "signups", status: "active" } });
+    const routeB = await prisma.route.create({ data: { businessId: REVO.businessId, objectiveId: objB.id, source: "composed", status: "active" } });
+    const lockedWpB = (await prisma.routeWaypoint.create({ data: { businessId: REVO.businessId, routeId: routeB.id, order: 1, title: "Their grow", goal: "their goal", status: "locked" } })).id;
+    await proposeRouteRevision(REVO, { routeId: routeB.id, waypointId: lockedWpB, proposedGoal: "their new goal", rationale: "their reason" });
+  });
+
+  it("returns A's proposed revision (scoped — B's never leaks), null when none and after a decide", async () => {
+    // B already has a standing proposed revision (seeded above); A has none yet → null (non-vacuous scope).
+    expect(await getRoutePendingRevision(REV)).toBeNull();
+
+    const res = await proposeRouteRevision(REV, { routeId, waypointId: lockedWpId, proposedGoal: "new goal", rationale: "because evidence" });
+    const pending = await getRoutePendingRevision(REV);
+    expect(pending).toMatchObject({
+      id: res!.revisionId, routeId, waypointTitle: "Grow",
+      priorGoal: "old goal", proposedGoal: "new goal", rationale: "because evidence",
+    });
+
+    // After the founder decides, the card clears.
+    await decideRouteRevision(REV, { revisionId: res!.revisionId, decision: "rejected" }, new Date());
+    expect(await getRoutePendingRevision(REV)).toBeNull();
+  });
+
+  it("after approve, getTimeline carries the revision under its waypoint with the was/now body", async () => {
+    const res = await proposeRouteRevision(REV, { routeId, waypointId: lockedWpId, proposedGoal: "new goal", rationale: "because evidence" });
+    // Seed the mirror first so the approve's mirror-refresh path runs (getTimeline mirrors lazily anyway).
+    await mirrorPlanToGraph(REV, routeId, new Date());
+    await decideRouteRevision(REV, { revisionId: res!.revisionId, decision: "approved" }, new Date());
+
+    const timeline = await getTimeline(REV);
+    const grown = timeline.waypoints.find((w) => w.title === "Grow")!;
+    expect(grown.revisions).toHaveLength(1);
+    expect(grown.revisions[0]!.body).toContain("Goal was:");
+    expect(grown.revisions[0]!.body).toContain("old goal");
+    expect(grown.revisions[0]!.createdAt).toBeInstanceOf(Date);
+
+    // Scoped: A's revision never surfaces on B's timeline.
+    const otherTimeline = await getTimeline(REVO);
+    expect(otherTimeline.waypoints.every((w) => w.revisions.length === 0)).toBe(true);
   });
 });
