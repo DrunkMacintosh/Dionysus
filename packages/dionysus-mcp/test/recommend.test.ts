@@ -27,6 +27,10 @@ describe("recommendNextAction", () => {
     await persistCraftBelief({ businessId: BIZ }, { role: "copywriter", featureKey: "channel=hackernews", belief: belief("positive", 0.5, "approved as-is") });
     await persistCraftBelief({ businessId: BIZ }, { role: GROWTH_ROLE, featureKey: "channel=hackernews", belief: belief("positive", 0.6, "number rose after") });
     await persistCraftBelief({ businessId: BIZ }, { role: GROWTH_ROLE, featureKey: "channel=x", belief: belief("negative", 0.7, "number fell after") });
+    // Make "x" a real candidate: a non-proposed action in history carrying channel=x. Otherwise
+    // candidates = action-history + DEFAULT_EXPLORE_CHANNELS = ["hackernews"] only, so scoring is
+    // never exercised (single candidate). "rejected" keeps it out of the standing-proposal check.
+    await prisma.routeAction.create({ data: { businessId: BIZ, waypointId, employeeRole: "copywriter", type: "post", status: "rejected", featuresJson: JSON.stringify({ channel: "x" }) } });
 
     const rec = await recommendNextAction({ businessId: BIZ });
     expect(rec?.channel).toBe("hackernews"); // 0.5*1 + 0.6*2 = 1.7 beats x's -1.4 and any explore bonus

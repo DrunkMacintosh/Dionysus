@@ -47,7 +47,8 @@ export async function recommendNextAction(identity: Identity): Promise<Recommend
 
   // Live (non-superseded) beliefs, scored per channel.
   const beliefs = await prisma.memoryNode.findMany({
-    where: { businessId, type: "learning", NOT: { sourceId: { contains: "::superseded::" } } } });
+    where: { businessId, type: "learning", NOT: { sourceId: { contains: "::superseded::" } } },
+    orderBy: { sourceId: "asc" } }); // deterministic cited-body join order in the rationale (channel sum is commutative)
   let best: { channel: string; score: number; cited: string[] } | null = null;
   for (const channel of [...channels].sort()) { // alphabetical order → deterministic tie-break (first wins)
     const key = `channel=${channel}`;
