@@ -52,7 +52,7 @@ export async function recommendNextAction(identity: Identity): Promise<Recommend
   const beliefs = await prisma.memoryNode.findMany({
     where: { businessId, type: "learning", NOT: { sourceId: { contains: "::superseded::" } } },
     orderBy: { sourceId: "asc" } }); // deterministic cited-body join order in the rationale (channel sum is commutative)
-  let best: { channel: string; score: number; cited: string[] } | null = null;
+  let best: { channel: string; score: number; cited: string[]; hasEvidence: boolean } | null = null;
   for (const channel of [...channels].sort()) { // alphabetical order → deterministic tie-break (first wins)
     const key = `channel=${channel}`;
     const mine = beliefs.filter((b) => b.sourceId === `copywriter::${key}` || b.sourceId === `${GROWTH_ROLE}::${key}`);
@@ -64,13 +64,18 @@ export async function recommendNextAction(identity: Identity): Promise<Recommend
       if (b.stance === "positive") cited.push(b.body);
     }
     if (mine.length === 0) score += EXPLORE_BONUS; // evidence-free → worth exploring
-    if (!best || score > best.score) best = { channel, score, cited };
+    if (!best || score > best.score) best = { channel, score, cited, hasEvidence: mine.length > 0 };
   }
   if (!best) return null;
 
+  // Honest rationale: cite positive evidence when it exists; say "exploring" ONLY when there is
+  // genuinely no evidence; when evidence exists but none is positive, say so plainly — never
+  // claim "no evidence" while /learned shows a negative belief for the same channel.
   const reason = best.cited.length > 0
     ? `Recommended: post on ${best.channel} — ${best.cited.join(" ")}`
-    : `Recommended: post on ${best.channel} — exploring; no evidence for this channel yet.`;
+    : best.hasEvidence
+      ? `Recommended: post on ${best.channel} — the evidence so far is mixed or negative everywhere; this is the least-discouraged option.`
+      : `Recommended: post on ${best.channel} — exploring; no evidence for this channel yet.`;
 
   // NEVER-AUTO: lands as a `proposed` action in the founder's review pipeline.
   const { actionId } = await upsertRouteAction(identity, {
