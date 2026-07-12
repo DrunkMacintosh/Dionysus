@@ -31,8 +31,14 @@ async function seedBusiness(businessId: string, name: string) {
 const SIGNAL_URL = "https://news.ycombinator.com/item?id=42";
 const hnTransport: HnTransport = async () => ({ status: 200,
   body: JSON.stringify({ hits: [{ title: "Devtool wave", objectID: "42", points: 120 }] }) });
+// Dual-purpose fake: radar calls get an OBSERVATIONS payload; the nightly's drafts
+// section (draftWaypoint) sends an "Action: draft ..." instruction — answer THOSE with a
+// schema-valid draft ({channel, kind, content:{title, body}}) so the briefing can bind an asset.
 const goodHarness = (): Harness => ({
-  async runAgent(_def: AgentDef, _input: string) {
+  async runAgent(_def: AgentDef, input: string) {
+    if (input.includes("Action: draft")) {
+      return { finalOutput: JSON.stringify({ channel: "hackernews", kind: "post", content: { title: "T", body: "b" } }) };
+    }
     return { finalOutput: JSON.stringify({ observations: [{ title: "Devtool wave", body: "b", sourceUrl: SIGNAL_URL, relevance: 8, confidence: 0.6 }] }) };
   },
 });
@@ -45,7 +51,9 @@ describe("runNightly", () => {
     const res = await runNightly(A, { harness: goodHarness(), models: { brain: "fake" }, hnTransport });
     expect(res.radar.status).toBe("ok");
     expect(await prisma.memoryNode.count({ where: { businessId: A.businessId, type: "market-observation" } })).toBe(1);
-    expect(await prisma.routeAction.count({ where: { businessId: A.businessId, status: "proposed" } })).toBe(1);
+    // Radar proposed exactly one action (the high-relevance observation). The nightly's learn
+    // section now ALSO proposes a recommender action, so scope this count to radar's own proposal.
+    expect(await prisma.routeAction.count({ where: { businessId: A.businessId, status: "proposed", featuresJson: { contains: '"radar":true' } } })).toBe(1);
   });
 
   it("skips radar (honestly) when the business has no objective; metrics skips when no source is connected", async () => {
@@ -61,6 +69,27 @@ describe("runNightly", () => {
     expect(res.radar.status).toBe("failed");
     expect(res.metrics.status).toBe("skipped"); // the independent section still ran
     expect(await prisma.memoryNode.count({ where: { businessId: A.businessId, type: "market-observation" } })).toBe(0);
+  });
+
+  it("morning briefing: the nightly learns, recommends, and DRAFTS — the founder wakes to a reviewable draft", async () => {
+    // A has an objective + active waypoint (seedBusiness) and NO proposed actions yet.
+    const res = await runNightly(A, { harness: goodHarness(), models: { brain: "fake" }, hnTransport });
+    expect(res.learn.status).toBe("ok");
+    expect(res.drafts.status).toBe("ok");
+    // The recommender proposed (recommender:true) AND the night drafted it: asset bound.
+    const recommended = await prisma.routeAction.findFirst({
+      where: { businessId: A.businessId, featuresJson: { contains: '"recommender":true' } } });
+    expect(recommended).not.toBeNull();
+    expect(recommended?.status).toBe("proposed"); // never-auto — still needs the founder
+    expect(recommended?.assetId).not.toBeNull(); // but ALREADY DRAFTED → visible on /drafts
+  });
+
+  it("the drafts section reports skipped when there is nothing undrafted", async () => {
+    await prisma.routeAction.deleteMany({ where: { businessId: A.businessId } });
+    await prisma.routeWaypoint.updateMany({ where: { businessId: A.businessId }, data: { status: "done" } });
+    const res = await runNightly(A, { harness: goodHarness(), models: { brain: "fake" }, hnTransport });
+    expect(res.learn.status).toBe("skipped"); // no active waypoint → no recommendation
+    expect(res.drafts.status).toBe("skipped");
   });
 });
 
