@@ -15,10 +15,12 @@ export default async function LearnedPage() {
   const beliefs = await getCraftBeliefs(identity);
   return (
     <main>
-      <h2>What I&apos;ve learned about your drafts</h2>
+      <h2>What I&apos;ve learned</h2>
       <p style={{ color: "#666" }}>
-        Craft observations from how you review drafts — what you approve as-is versus edit or reject.
-        These are hypotheses, not performance claims; I label low confidence where the evidence is thin.
+        What I&apos;ve learned so far — craft (what you approve as-is versus edit or reject) and, once
+        analytics is connected, measured tendencies (which kinds of posts your number tended to rise
+        after — correlations, never proven causation). Hypotheses, not facts; I label low confidence
+        where the evidence is thin.
       </p>
       {beliefs.length === 0 ? (
         <p>Nothing learned yet — I&apos;ll start noticing patterns as you review drafts.</p>
