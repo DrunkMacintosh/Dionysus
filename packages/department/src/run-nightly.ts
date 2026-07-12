@@ -1,7 +1,8 @@
-// Stage 6a/6b — the NIGHTLY WAKE (the D30 platform-trigger slice). One unattended routine
-// per business, FOUR best-effort + independent sections in order: radar sensing (4e) →
+// Stage 6a/6b/6c — the NIGHTLY WAKE (the D30 platform-trigger slice). One unattended routine
+// per business, FIVE best-effort + independent sections in order: radar sensing (4e) →
 // metric ingestion (5d) → LEARN (6b: refresh craft+performance beliefs, then recommend the
-// next action — deterministic, never-auto) → DRAFTS (6b: draft the undrafted proposals so the
+// next action — deterministic, never-auto) → STRATEGY (6c: propose a founder-gated route
+// revision when the plan measurably stalls) → DRAFTS (6b: draft the undrafted proposals so the
 // founder wakes to a reviewable morning briefing). All under the business's OWN ambient
 // identity (D27.1). The sweep is the platform operator: it iterates businesses but never mixes
 // tenants, and one business's failure NEVER blocks the next (per-business isolation,
@@ -13,6 +14,7 @@ import { ingestMetrics, metricTransportFromSafeFetch, type MetricTransport } fro
 import { deriveCraftBeliefs } from "dionysus-mcp/tools/belief-graph";
 import { derivePerformanceBeliefs } from "dionysus-mcp/tools/performance-belief";
 import { recommendNextAction } from "dionysus-mcp/tools/recommend";
+import { analyzeRouteForRevision } from "dionysus-mcp/tools/growth-analyst";
 import type { Harness } from "./llm/types.js";
 import type { HnTransport } from "./tools/hn-source.js";
 import { runRadar } from "./run-radar.js";
@@ -28,13 +30,13 @@ export type SectionResult =
   | { status: "ok"; detail: string }
   | { status: "skipped"; reason: string }
   | { status: "failed"; reason: string };
-export type NightlyBusinessResult = { businessId: string; radar: SectionResult; metrics: SectionResult; learn: SectionResult; drafts: SectionResult };
+export type NightlyBusinessResult = { businessId: string; radar: SectionResult; metrics: SectionResult; learn: SectionResult; strategy: SectionResult; drafts: SectionResult };
 
 function failureReason(error: unknown): string {
   return error instanceof Error ? error.message : "unknown error";
 }
 
-/** One business's night: radar → metrics → learn → drafts, each best-effort — never throws to the caller. */
+/** One business's night: radar → metrics → learn → strategy → drafts, each best-effort — never throws to the caller. */
 export async function runNightly(identity: Identity, deps: NightlyDeps): Promise<NightlyBusinessResult> {
   const businessId = identity.businessId;
   // ONE clock for the whole night — the learn section's boundary time, matching draftWaypoint's
@@ -93,6 +95,20 @@ export async function runNightly(identity: Identity, deps: NightlyDeps): Promise
     learn = { status: "failed", reason: failureReason(error) };
   }
 
+  // STRATEGY — the Growth Analyst: propose a founder-gated route revision when the plan is
+  // measurably not working AND the evidence favors a channel. Deterministic, never-auto.
+  // Runs AFTER learn (on tonight's fresh beliefs) and BEFORE drafts (a future revision-driven
+  // draft sees it). Reuses the single `now`.
+  let strategy: SectionResult;
+  try {
+    const res = await analyzeRouteForRevision(identity, now);
+    strategy = res
+      ? { status: "ok", detail: `route revision proposed (${res.revisionId})` }
+      : { status: "skipped", reason: "plan working/young, no evidence target, or a revision already standing" };
+  } catch (error: unknown) {
+    strategy = { status: "failed", reason: failureReason(error) };
+  }
+
   // DRAFTS — the morning briefing: draft any undrafted proposals on the active waypoint so the
   // founder wakes to REVIEWABLE drafts (never-auto: they are still `proposed`). draftWaypoint is
   // budget-fail-closed FIRST and skips bound proposals (founder edits are sacred). Runs LAST so the
@@ -114,7 +130,7 @@ export async function runNightly(identity: Identity, deps: NightlyDeps): Promise
     drafts = { status: "failed", reason: failureReason(error) }; // incl. budget fail-closed
   }
 
-  return { businessId, radar, metrics, learn, drafts };
+  return { businessId, radar, metrics, learn, strategy, drafts };
 }
 
 /** The platform sweep: every business, each under its own identity, failures isolated. */
@@ -130,6 +146,7 @@ export async function runNightlySweep(deps: NightlyDeps): Promise<NightlyBusines
         radar: { status: "failed", reason: failureReason(error) },
         metrics: { status: "failed", reason: failureReason(error) },
         learn: { status: "failed", reason: failureReason(error) },
+        strategy: { status: "failed", reason: failureReason(error) },
         drafts: { status: "failed", reason: failureReason(error) } });
     }
   }

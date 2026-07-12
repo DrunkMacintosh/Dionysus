@@ -91,6 +91,14 @@ describe("runNightly", () => {
     expect(res.learn.status).toBe("skipped"); // no active waypoint → no recommendation
     expect(res.drafts.status).toBe("skipped");
   });
+
+  it("the strategy section runs and skips for a young/healthy plan — never-auto, only stalled plans get revised", async () => {
+    // The standard fixture (Alpha Co) is fresh with no stalled verdict → analyzeRouteForRevision
+    // returns null → strategy reports skipped. (The stalled-path proposal is the T6 eval gate's job.)
+    const res = await runNightly(A, { harness: goodHarness(), models: { brain: "fake" }, hnTransport });
+    expect(res.strategy).toBeDefined();
+    expect(res.strategy.status).toBe("skipped");
+  });
 });
 
 describe("runNightlySweep", () => {
