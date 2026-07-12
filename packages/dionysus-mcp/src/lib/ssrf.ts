@@ -289,7 +289,10 @@ export async function safeFetch(
         if (!loc || typeof loc !== "string") throw new SsrfError("Redirect without location");
         if (hop === maxRedirects) throw new SsrfError(`Too many redirects (> ${maxRedirects})`);
         const nextUrl = new URL(loc, url); // relative or absolute — re-validated on next loop
-        if (nextUrl.host !== url.host) extraHeaders = {}; // cross-host: never forward caller credentials
+        // Cross-ORIGIN (host or scheme change): never forward caller credentials — a same-host
+        // https→http downgrade would otherwise re-send the Bearer over cleartext (fetch-spec strips
+        // on any origin change; stripping more is always safe).
+        if (nextUrl.host !== url.host || nextUrl.protocol !== url.protocol) extraHeaders = {};
         url = nextUrl;
         continue;
       }
