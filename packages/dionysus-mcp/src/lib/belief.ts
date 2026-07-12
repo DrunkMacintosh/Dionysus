@@ -99,3 +99,34 @@ export function scoreCraftBelief(evidence: FeatureEvidence, now: Date): CraftBel
 
   return { confidence, stance, lowConfidence, summary };
 }
+
+export type DirectionEvidence = { rose: number; fell: number; flat: number; lastSendAt: Date | null };
+
+/**
+ * Score measured send-window DIRECTION evidence into a labeled belief (5d/6b — PERFORMANCE).
+ * The summary reports direction + counts ONLY ("3 rose, 1 fell of 4 measured sends") — never a
+ * %/metric word: per-feature percentages at small N are spurious precision, and recall text bans
+ * metric words. Every summary carries the correlation-not-causation label (spec §16 line 202).
+ */
+export function scorePerformanceBelief(evidence: DirectionEvidence, now: Date): CraftBelief {
+  const { rose, fell, flat } = evidence;
+  const total = rose + fell + flat;
+  const lowConfidence = total < MIN_EVIDENCE_FOR_CONFIDENCE;
+  if (total === 0) {
+    return { confidence: 0, stance: "neutral", lowConfidence: true, summary: "Still learning — no measured sends yet." };
+  }
+  const net = (rose - fell) / total;
+  const stance: BeliefStance = net > 0.15 ? "positive" : net < -0.15 ? "negative" : "neutral";
+  const evidenceWeight = total / (total + MIN_EVIDENCE_FOR_CONFIDENCE);
+  const recency = recencyWeight(evidence.lastSendAt, now);
+  let confidence = Math.abs(net) * evidenceWeight * recency;
+  if (lowConfidence) confidence = Math.min(confidence, 0.4);
+  confidence = Math.max(0, Math.min(1, confidence));
+  const counts = `${rose} rose, ${fell} fell, ${flat} flat of ${total} measured send${total === 1 ? "" : "s"}`;
+  const lead =
+    stance === "positive" ? "Your number tended to rise in the week after these went live"
+    : stance === "negative" ? "Your number tended to fall in the week after these went live"
+    : "No clear direction after these went live";
+  const tail = lowConfidence ? " Still learning — low confidence." : "";
+  return { confidence, stance, lowConfidence, summary: `${lead} (${counts}). Correlation, not proven causation.${tail}` };
+}
