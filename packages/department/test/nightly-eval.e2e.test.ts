@@ -64,6 +64,7 @@ describe("§15 stage-6a eval gate — the nightly wake", () => {
     const obs1 = await prisma.memoryNode.count({ where: { businessId: A.businessId, type: "market-observation" } });
     const act1 = await prisma.routeAction.count({ where: { businessId: A.businessId } });
     expect(obs1).toBe(2); // the first night really recorded (non-vacuous baseline)
+    expect(act1).toBe(2); // the first night really proposed — keeps the proposal-rerun half non-vacuous
 
     const second = await runNightly(A, deps);
     expect(second.radar.status).toBe("ok"); // a quiet rerun is still a healthy night
