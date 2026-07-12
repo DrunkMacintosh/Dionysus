@@ -40,6 +40,15 @@ describe("ObservationsSchema", () => {
     expect(fixed.observations[0].sourceUrl).toBe(good.observations[0].sourceUrl);
     await expect(parseObservations("{bad", async () => "{worse")).rejects.toThrow();
   });
+  it("truncates to MAX_OBSERVATIONS instead of hard-failing — an over-cap night keeps its strongest 8", async () => {
+    const nine = Array.from({ length: 9 }, (_, i) => ({
+      title: `T${i}`, body: `B${i}`, sourceUrl: `https://news.ycombinator.com/item?id=${i}`,
+      relevance: 5, confidence: 0.5,
+    }));
+    const parsed = await parseObservations(JSON.stringify({ observations: nine }), async () => { throw new Error("retry must not be needed"); });
+    expect(parsed.observations).toHaveLength(8); // truncated, NOT rejected — the night is not thrown away
+    expect(parsed.observations[0]?.title).toBe("T0"); // keeps the first (strongest-first) items
+  });
 });
 
 describe("radar prompt", () => {
