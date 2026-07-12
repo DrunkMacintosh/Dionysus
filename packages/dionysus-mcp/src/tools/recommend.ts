@@ -15,9 +15,55 @@ export const CRAFT_WEIGHT = 1;
 export const DEFAULT_EXPLORE_CHANNELS = ["hackernews"];
 
 export type Recommendation = { actionId: string; channel: string; reason: string };
+export type ChannelCandidate = { channel: string; score: number; cited: string[]; hasEvidence: boolean };
 
 function stanceSign(stance: string | null): number {
   return stance === "positive" ? 1 : stance === "negative" ? -1 : 0;
+}
+
+/**
+ * Deterministic evidence scorer over channel candidates (this business's action-history
+ * channels + the default explore set). score = Σ(stanceSign × confidence × roleWeight) per
+ * channel — performance beliefs weigh 2× craft; an evidence-free channel gets the EXPLORE
+ * bonus. Returns EVERY candidate sorted best-first (score desc, then channel asc — the same
+ * order the alphabetical-first-wins loop produced). Scoped read, no writes; the winner is
+ * `[0]`. Extracted (DRY) so the Growth Analyst can reuse the same honest scoring.
+ */
+export async function scoreChannelCandidates(identity: Identity): Promise<ChannelCandidate[]> {
+  const businessId = identity.businessId;
+
+  // Candidates: channels seen in this business's history + the default explore set.
+  const actions = await prisma.routeAction.findMany({ where: { businessId } });
+  const channels = new Set<string>(DEFAULT_EXPLORE_CHANNELS);
+  for (const a of actions) {
+    try {
+      const f = JSON.parse(a.featuresJson) as { channel?: unknown };
+      if (typeof f.channel === "string" && f.channel) channels.add(f.channel);
+    } catch { /* malformed features contribute no candidate */ }
+  }
+
+  // Live (non-superseded) beliefs, scored per channel.
+  const beliefs = await prisma.memoryNode.findMany({
+    where: { businessId, type: "learning", NOT: { sourceId: { contains: "::superseded::" } } },
+    orderBy: { sourceId: "asc" } }); // deterministic cited-body join order in the rationale (channel sum is commutative)
+  const candidates: ChannelCandidate[] = [];
+  for (const channel of [...channels].sort()) { // alphabetical order → deterministic tie-break (first wins)
+    const key = `channel=${channel}`;
+    const mine = beliefs.filter((b) => b.sourceId === `copywriter::${key}` || b.sourceId === `${GROWTH_ROLE}::${key}`);
+    let score = 0;
+    const cited: string[] = [];
+    for (const b of mine) {
+      const weight = b.role === GROWTH_ROLE ? PERF_WEIGHT : CRAFT_WEIGHT;
+      score += stanceSign(b.stance) * b.confidence * weight;
+      if (b.stance === "positive") cited.push(b.body);
+    }
+    if (mine.length === 0) score += EXPLORE_BONUS; // evidence-free → worth exploring
+    candidates.push({ channel, score, cited, hasEvidence: mine.length > 0 });
+  }
+  // best-first: score desc, then channel asc. The array is built in channel-asc order and sort
+  // is stable, so among equal scores the alphabetically-first channel still wins — byte-identical
+  // to the prior `if (!best || score > best.score)` selection.
+  return candidates.sort((a, b) => b.score - a.score || (a.channel < b.channel ? -1 : a.channel > b.channel ? 1 : 0));
 }
 
 export async function recommendNextAction(identity: Identity): Promise<Recommendation | null> {
@@ -38,34 +84,7 @@ export async function recommendNextAction(identity: Identity): Promise<Recommend
     where: { businessId, status: "proposed", featuresJson: { contains: '"recommender":true' } } });
   if (standing) return null;
 
-  // Candidates: channels seen in this business's history + the default explore set.
-  const actions = await prisma.routeAction.findMany({ where: { businessId } });
-  const channels = new Set<string>(DEFAULT_EXPLORE_CHANNELS);
-  for (const a of actions) {
-    try {
-      const f = JSON.parse(a.featuresJson) as { channel?: unknown };
-      if (typeof f.channel === "string" && f.channel) channels.add(f.channel);
-    } catch { /* malformed features contribute no candidate */ }
-  }
-
-  // Live (non-superseded) beliefs, scored per channel.
-  const beliefs = await prisma.memoryNode.findMany({
-    where: { businessId, type: "learning", NOT: { sourceId: { contains: "::superseded::" } } },
-    orderBy: { sourceId: "asc" } }); // deterministic cited-body join order in the rationale (channel sum is commutative)
-  let best: { channel: string; score: number; cited: string[]; hasEvidence: boolean } | null = null;
-  for (const channel of [...channels].sort()) { // alphabetical order → deterministic tie-break (first wins)
-    const key = `channel=${channel}`;
-    const mine = beliefs.filter((b) => b.sourceId === `copywriter::${key}` || b.sourceId === `${GROWTH_ROLE}::${key}`);
-    let score = 0;
-    const cited: string[] = [];
-    for (const b of mine) {
-      const weight = b.role === GROWTH_ROLE ? PERF_WEIGHT : CRAFT_WEIGHT;
-      score += stanceSign(b.stance) * b.confidence * weight;
-      if (b.stance === "positive") cited.push(b.body);
-    }
-    if (mine.length === 0) score += EXPLORE_BONUS; // evidence-free → worth exploring
-    if (!best || score > best.score) best = { channel, score, cited, hasEvidence: mine.length > 0 };
-  }
+  const [best] = await scoreChannelCandidates(identity);
   if (!best) return null;
 
   // Honest rationale: cite positive evidence when it exists; say "exploring" ONLY when there is
