@@ -170,6 +170,8 @@ export type SafeFetchOptions = {
   maxBytes?: number;
   timeoutMs?: number;
   maxRedirects?: number;
+  /** Extra request headers (e.g. an analytics Bearer key). Merged over the default user-agent. */
+  headers?: Record<string, string>;
   lookupFn?: LookupFn;
   /** TEST-ONLY seams. Never set in production code paths. */
   __testAllowPrivate?: boolean;
@@ -273,7 +275,7 @@ export async function safeFetch(
         dispatcher: agent,
         headersTimeout: timeoutMs,
         bodyTimeout: timeoutMs,
-        headers: { "user-agent": "dionysus-mcp/0.1 (+verified-read-only)" },
+        headers: { "user-agent": "dionysus-mcp/0.1 (+verified-read-only)", ...(opts.headers ?? {}) },
       });
 
       if (res.statusCode >= 300 && res.statusCode < 400) {

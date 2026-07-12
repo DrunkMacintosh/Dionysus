@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { createServer } from "node:http";
 import { prisma } from "../src/db.js";
 import { CONFIG_KEY_ENV } from "../src/lib/secret-box.js";
 import { connectIntegration } from "../src/tools/integration.js";
-import { fetchCurrentMetric, ingestMetrics, type MetricTransport } from "../src/tools/analytics.js";
+import { fetchCurrentMetric, ingestMetrics, metricTransportFromSafeFetch, type MetricTransport } from "../src/tools/analytics.js";
 
 const BIZ = "biz_analytics_a";
 
@@ -52,5 +53,32 @@ describe("ingestMetrics", () => {
     const { snapshotId } = await ingestMetrics({ businessId: BIZ }, { transport: failTransport });
     expect(snapshotId).toBeNull();
     expect(await prisma.metricSnapshot.count({ where: { businessId: BIZ } })).toBe(0);
+  });
+});
+
+describe("metricTransportFromSafeFetch (production transport)", () => {
+  it("reads a real JSON metric through the SSRF-guarded fetch (test seam) and forwards the Bearer header", async () => {
+    let seenAuth = "";
+    const server = createServer((req, res) => {
+      seenAuth = String(req.headers["authorization"] ?? "");
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ value: 7 }));
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as { port: number }).port;
+    try {
+      const transport = metricTransportFromSafeFetch({ __testAllowPrivate: true });
+      const value = await fetchCurrentMetric({ endpoint: `http://127.0.0.1:${port}/stats`, apiKey: "k123" }, transport);
+      expect(value).toBe(7);
+      expect(seenAuth).toBe("Bearer k123");
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
+  it("a private/loopback endpoint WITHOUT the test seam is SSRF-blocked and degrades to null (no reading, no snapshot)", async () => {
+    const transport = metricTransportFromSafeFetch(); // production posture
+    const value = await fetchCurrentMetric({ endpoint: "http://127.0.0.1/stats" }, transport);
+    expect(value).toBeNull(); // the SSRF throw is caught by fetchCurrentMetric's degrade path
   });
 });

@@ -1,5 +1,6 @@
 import { prisma } from "../db.js";
 import type { Identity } from "../identity.js";
+import { safeFetch, type SafeFetchOptions } from "../lib/ssrf.js";
 import { getConnectedAnalytics, getDecryptedConfig, type IntegrationConfig } from "./integration.js";
 
 // The transport is injectable (tests) and, in production (6a trigger, NOT this stage),
@@ -37,6 +38,19 @@ export async function fetchCurrentMetric(config: IntegrationConfig, transport: M
   } catch {
     return null;
   }
+}
+
+/**
+ * The PRODUCTION MetricTransport: the stage-1 SSRF-guarded fetch (the analytics endpoint is
+ * founder-provided, semi-trusted). An SSRF block / network failure throws inside the transport,
+ * which fetchCurrentMetric catches and degrades to null — no reading, no snapshot, no fabrication.
+ * `opts` exists for the test seams only; production callers pass nothing.
+ */
+export function metricTransportFromSafeFetch(opts?: SafeFetchOptions): MetricTransport {
+  return async (url, headers) => {
+    const res = await safeFetch(url, { ...(opts ?? {}), headers: { ...(opts?.headers ?? {}), ...headers } });
+    return { ok: res.status === 200, status: res.status, json: async () => JSON.parse(res.body) as unknown };
+  };
 }
 
 /**
