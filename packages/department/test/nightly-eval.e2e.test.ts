@@ -82,7 +82,10 @@ describe("§15 stage-6a eval gate — the nightly wake", () => {
     expect(await prisma.memoryNode.count({ where: { businessId: A.businessId, type: "market-observation" } })).toBe(MAX_OBSERVATIONS);
   });
 
-  it("inv3 — ISOLATION + BUDGET FAIL-CLOSED: an exhausted business makes ZERO model calls and never blocks the next", async () => {
+  // 45s timeout: the sweep iterates EVERY business in the shared test DB, and under a full-suite
+  // run the accumulated tenants (each now getting a learn+drafts pass) push past vitest's 15s
+  // default. Timing-only — the assertions are unchanged; the file passes in ~1s on a fresh DB.
+  it("inv3 — ISOLATION + BUDGET FAIL-CLOSED: an exhausted business makes ZERO model calls and never blocks the next", { timeout: 45000 }, async () => {
     await prisma.business.update({ where: { id: A.businessId }, data: { maxTokensPerDay: 0 } });
     const calls: string[] = [];
     const results = await runNightlySweep({ harness: citingHarness(1, calls), models: { brain: "fake" }, hnTransport: hnTransportFor(1) });
