@@ -85,8 +85,22 @@ export async function runRadar(
     console.error(`radar: dropped ${dropped} observation(s) citing a source URL not in the fetched set (§6.2 fabrication).`);
   }
 
-  const observations: RadarObservation[] = [];
+  // Rerun-safety (6a): an already-recorded sourceUrl is not new news — skip it entirely
+  // (neither re-recorded NOR re-proposed), so an unattended nightly rerun adds zero duplicates.
+  // Scoped to THIS business: another tenant's identical sourceUrl never suppresses ours.
+  const fresh: typeof survivors = [];
   for (const o of survivors) {
+    const known = await prisma.memoryNode.findFirst({
+      where: { businessId: identity.businessId, type: "market-observation", sourceUrl: o.sourceUrl } });
+    if (known) continue;
+    fresh.push(o);
+  }
+  if (fresh.length < survivors.length) {
+    console.error(`radar: skipped ${survivors.length - fresh.length} already-recorded observation(s) (rerun dedup).`);
+  }
+
+  const observations: RadarObservation[] = [];
+  for (const o of fresh) {
     // D27.2: recordObservation always marks the node tainted; §6.2: sourceUrl is
     // guaranteed real (fetched-set member), so its fail-closed check passes.
     const { nodeId } = await recordObservation(identity, {
@@ -102,7 +116,7 @@ export async function runRadar(
     const activeWaypoint = await prisma.routeWaypoint.findFirst({
       where: { routeId: input.routeId, businessId: identity.businessId, status: "active" } });
     if (activeWaypoint) {
-      for (const o of survivors) {
+      for (const o of fresh) {
         if (o.relevance < PROPOSE_RELEVANCE_THRESHOLD) continue;
         const { actionId } = await upsertRouteAction(identity, {
           waypointId: activeWaypoint.id, employeeRole: "copywriter", type: "post",

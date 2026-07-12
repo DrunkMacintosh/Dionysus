@@ -234,6 +234,10 @@ describe("§15 stage-4e eval gate — observations are sourced, tainted, fenced,
 
     // A passes B's routeId. The active-waypoint lookup is caller-scoped, so it misses:
     // observations still record under A, but zero proposals are written and B is untouched.
+    // 6a rerun dedup: A already recorded URL_1/URL_2 in the first call above, so clear them
+    // here to keep this second call a FIRST run for those signals — otherwise dedup (correctly)
+    // skips the re-noticed URLs. The cross-tenant assertions below are unaffected either way.
+    await prisma.memoryNode.deleteMany({ where: { businessId: XA.businessId, type: "market-observation" } });
     const beforeBActions = await prisma.routeAction.count({ where: { businessId: XB.businessId } });
     const resForeign = await runRadar(XA, radarInput(xbRoute), { harness: capturingHarness(OUTPUT).harness, models: { brain: "fake" }, hnTransport: okTransport(HITS) });
     expect(resForeign.observations).toHaveLength(2); // radar ran fully (didn't short-circuit)...

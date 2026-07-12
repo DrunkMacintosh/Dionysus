@@ -143,6 +143,10 @@ describe("runRadar (sense -> observe -> propose; the honesty core)", () => {
 
   it("cross-tenant routeId: records observations under the CALLER, zero cross-tenant proposals", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
+    // 6a rerun dedup: this case re-uses the CALLER tenant, whose URL_S1/URL_S2 were
+    // already recorded by the first test. Clear them so this remains a FIRST run for
+    // these signals — otherwise dedup (correctly) skips the re-noticed URLs.
+    await prisma.memoryNode.deleteMany({ where: { businessId: CALLER.businessId, type: "market-observation" } });
     const beforeCallerMem = await memCount(CALLER.businessId);
     const beforeOtherAct = await actionCount(OTHER.businessId);
     const harness = fakeHarness(HAPPY);
@@ -169,5 +173,22 @@ describe("runRadar (sense -> observe -> propose; the honesty core)", () => {
     expect(await memCount(CALLER.businessId)).toBe(beforeCallerMem);
     const otherActions = await prisma.routeAction.findMany({ where: { businessId: OTHER.businessId } });
     expect(otherActions.every((a) => a.businessId === OTHER.businessId)).toBe(true);
+  });
+
+  it("is rerun-safe: a second radar run over the same signals records ZERO new observations and ZERO new proposals", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    // Own tenant, seeded once, so the two runs below SHARE state (6a nightly rerun).
+    const RERUN = { businessId: "biz_radar_rerun" };
+    const rerunRoute = await seedTenant(RERUN.businessId);
+
+    const first = await runRadar(RERUN, input(rerunRoute), { harness: fakeHarness(HAPPY), models: { brain: "fake" }, hnTransport: okTransport(HITS) });
+    expect(first.observations.length).toBeGreaterThan(0);
+    const obsAfterFirst = await memCount(RERUN.businessId);
+    const actionsAfterFirst = await actionCount(RERUN.businessId);
+
+    const second = await runRadar(RERUN, input(rerunRoute), { harness: fakeHarness(HAPPY), models: { brain: "fake" }, hnTransport: okTransport(HITS) });
+    expect(second.observations).toHaveLength(0); // everything already known — a re-noticed URL is not new news
+    expect(await memCount(RERUN.businessId)).toBe(obsAfterFirst);
+    expect(await actionCount(RERUN.businessId)).toBe(actionsAfterFirst);
   });
 });
