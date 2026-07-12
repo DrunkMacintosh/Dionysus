@@ -6,7 +6,8 @@
   "scripts": {
     "test": "vitest run",
     "build": "tsc -p tsconfig.json",
-    "smoke": "node scripts/live-smoke.mjs"
+    "smoke": "node scripts/live-smoke.mjs",
+    "nightly": "node scripts/nightly.mjs"
   },
   "dependencies": {
     "openai": "latest",
