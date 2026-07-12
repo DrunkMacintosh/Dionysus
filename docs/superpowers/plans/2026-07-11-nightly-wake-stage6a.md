@@ -583,7 +583,7 @@ console.log(`\nnightly: ${results.length} business(es) in ${Math.round((Date.now
 process.exit(0); // per-business failures are REPORTED, not fatal — the sweep itself succeeded
 ```
 
-- [ ] **Step 2: Verify it builds + fail-safes.** `cd D:\Dionysus\packages\department; pnpm build` then run the script against the TEST DB with no gateway running: `$env:DATABASE_URL="file:../dionysus-mcp/prisma/.tmp/test.db"; node scripts/nightly.mjs` — expected: a JSON report where radar sections are `failed` (gateway unreachable) or `skipped`, metrics `skipped`, exit 0. (This is the acceptance: it exists, builds against dist/, degrades honestly. The live run happens when the founder starts the gateway.)
+- [ ] **Step 2: Verify it builds + fail-safes.** `cd D:\Dionysus\packages\department; pnpm build` then run the script against the TEST DB with no gateway running: `$env:DATABASE_URL="file:./.tmp/test.db"; node scripts/nightly.mjs` — (Prisma resolves a relative `file:` URL against the SCHEMA dir, `packages/dionysus-mcp/prisma/`, not the CWD — so the value is the same one the suites use). Expected: a JSON report where radar sections are `failed` (gateway unreachable) or `skipped`, metrics `skipped`, exit 0. (This is the acceptance: it exists, builds against dist/, degrades honestly. The live run happens when the founder starts the gateway.)
 - [ ] **Step 3: Commit** — `feat: nightly operator script - one sweep, any scheduler, per-business report`
 
 ---
