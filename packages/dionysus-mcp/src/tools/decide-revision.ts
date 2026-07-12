@@ -38,9 +38,12 @@ export async function decideRouteRevision(
     data: { goal: revision.proposedGoal } });
   if (applied.count === 0) throw new Error(`Waypoint ${revision.waypointId} is no longer revisable (not locked/in-scope).`);
 
-  // Flip the revision atomically (proposed → approved), guarded against a concurrent decide.
+  // Flip the revision to approved UNCONDITIONALLY now the goal is applied: "goal applied ⟺
+  // status approved" is the invariant. A racing reject that slipped between our proposed-load
+  // and this flip loses — the applied goal IS an approval, and the record must say so (a
+  // status-guarded flip here would leave goal-applied + status-rejected: an inconsistent record).
   await prisma.routeRevision.updateMany({
-    where: { id: revision.id, businessId, status: "proposed" },
+    where: { id: revision.id, businessId },
     data: { status: "approved", decidedAt: now } });
 
   // BEST-EFFORT graph record — the RouteRevision row is already durable, so a graph failure is
