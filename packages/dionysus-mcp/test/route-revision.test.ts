@@ -33,7 +33,8 @@ describe("proposeRouteRevision", () => {
   it("refuses a non-locked waypoint and a cross-tenant route", async () => {
     await expect(proposeRouteRevision({ businessId: BIZ }, { routeId, waypointId: activeWpId, proposedGoal: "x", rationale: "r" })).rejects.toThrow(/locked/i);
     await expect(proposeRouteRevision({ businessId: OTHER }, { routeId, waypointId: lockedWpId, proposedGoal: "x", rationale: "r" })).rejects.toThrow(/not found/i);
-    expect(await prisma.routeRevision.count()).toBe(0);
+    // Scoped to this suite's tenants — an unscoped global count is fragile on the shared test DB.
+    expect(await prisma.routeRevision.count({ where: { businessId: { in: [BIZ, OTHER] } } })).toBe(0);
   });
 
   it("ONE standing revision per route: a second propose returns null and writes nothing", async () => {
