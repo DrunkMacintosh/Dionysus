@@ -221,6 +221,11 @@ export async function safeFetch(
     throw new SsrfError(`Invalid URL: ${rawUrl}`);
   }
 
+  // Caller headers (e.g. an analytics Bearer key) are sent to the ORIGIN the caller named.
+  // On a CROSS-HOST redirect they are dropped (fetch-spec behavior: never forward credentials
+  // to a host the caller didn't name) — the redirect target still gets the default UA only.
+  let extraHeaders: Record<string, string> = { ...(opts.headers ?? {}) };
+
   for (let hop = 0; hop <= maxRedirects; hop++) {
     if (url.protocol !== "http:" && url.protocol !== "https:") {
       throw new SsrfError(`Blocked scheme: ${url.protocol}`);
@@ -275,7 +280,7 @@ export async function safeFetch(
         dispatcher: agent,
         headersTimeout: timeoutMs,
         bodyTimeout: timeoutMs,
-        headers: { "user-agent": "dionysus-mcp/0.1 (+verified-read-only)", ...(opts.headers ?? {}) },
+        headers: { "user-agent": "dionysus-mcp/0.1 (+verified-read-only)", ...extraHeaders },
       });
 
       if (res.statusCode >= 300 && res.statusCode < 400) {
@@ -283,7 +288,9 @@ export async function safeFetch(
         await res.body.dump();
         if (!loc || typeof loc !== "string") throw new SsrfError("Redirect without location");
         if (hop === maxRedirects) throw new SsrfError(`Too many redirects (> ${maxRedirects})`);
-        url = new URL(loc, url); // relative or absolute — re-validated on next loop
+        const nextUrl = new URL(loc, url); // relative or absolute — re-validated on next loop
+        if (nextUrl.host !== url.host) extraHeaders = {}; // cross-host: never forward caller credentials
+        url = nextUrl;
         continue;
       }
 

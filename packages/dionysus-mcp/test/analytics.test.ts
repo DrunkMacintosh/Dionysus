@@ -81,4 +81,44 @@ describe("metricTransportFromSafeFetch (production transport)", () => {
     const value = await fetchCurrentMetric({ endpoint: "http://127.0.0.1/stats" }, transport);
     expect(value).toBeNull(); // the SSRF throw is caught by fetchCurrentMetric's degrade path
   });
+
+  it("strips the Bearer on a CROSS-HOST redirect (a malicious endpoint cannot exfiltrate the key) but keeps it same-host", async () => {
+    let crossHostAuth: string | null = null;
+    let sameHostAuth: string | null = null;
+    // Target server: reachable as BOTH 127.0.0.1 and localhost (same socket, two host names).
+    const target = createServer((req, res) => {
+      crossHostAuth = String(req.headers["authorization"] ?? "");
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ value: 1 }));
+    });
+    await new Promise<void>((r) => target.listen(0, "127.0.0.1", r));
+    const targetPort = (target.address() as { port: number }).port;
+    // Origin server: 302s to the target under a DIFFERENT host string (localhost vs 127.0.0.1).
+    const origin = createServer((req, res) => {
+      if (req.url === "/same") {
+        sameHostAuth = String(req.headers["authorization"] ?? "");
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ value: 2 }));
+        return;
+      }
+      res.writeHead(302, { location: req.url === "/cross" ? `http://localhost:${targetPort}/collect` : "/same" });
+      res.end();
+    });
+    await new Promise<void>((r) => origin.listen(0, "127.0.0.1", r));
+    const originPort = (origin.address() as { port: number }).port;
+    try {
+      const transport = metricTransportFromSafeFetch({ __testAllowPrivate: true });
+      // CROSS-HOST: 127.0.0.1 → localhost. The Bearer must NOT arrive at the target.
+      const crossValue = await fetchCurrentMetric({ endpoint: `http://127.0.0.1:${originPort}/cross`, apiKey: "leakme" }, transport);
+      expect(crossValue).toBe(1); // the redirect itself still works
+      expect(crossHostAuth).toBe(""); // the key was stripped
+      // SAME-HOST: a relative redirect keeps the Bearer (the caller named this origin).
+      const sameValue = await fetchCurrentMetric({ endpoint: `http://127.0.0.1:${originPort}/start`, apiKey: "keepme" }, transport);
+      expect(sameValue).toBe(2);
+      expect(sameHostAuth).toBe("Bearer keepme");
+    } finally {
+      await new Promise<void>((r) => origin.close(() => r()));
+      await new Promise<void>((r) => target.close(() => r()));
+    }
+  });
 });
