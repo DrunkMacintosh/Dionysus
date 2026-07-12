@@ -57,16 +57,23 @@ export async function persistCraftBelief(
     const snapshotCount = await prisma.memoryNode.count({
       where: { businessId: identity.businessId, type: "learning", sourceId: { startsWith: `${sourceId}::superseded::` } },
     });
-    const snapshot = await prisma.memoryNode.create({
-      data: {
-        businessId: identity.businessId, type: "learning", role, waypointId: null,
-        title: `${title} (superseded)`, body: existing.body, confidence: existing.confidence, stance: existing.stance,
-        sourceId: `${sourceId}::superseded::${snapshotCount}`, tainted: false,
-      },
-    });
-    await prisma.memoryEdge.create({
-      data: { businessId: identity.businessId, fromId: existing.id, toId: snapshot.id, kind: "supersedes" },
-    });
+    try {
+      const snapshot = await prisma.memoryNode.create({
+        data: {
+          businessId: identity.businessId, type: "learning", role, waypointId: null,
+          title: `${title} (superseded)`, body: existing.body, confidence: existing.confidence, stance: existing.stance,
+          sourceId: `${sourceId}::superseded::${snapshotCount}`, tainted: false,
+        },
+      });
+      await prisma.memoryEdge.create({
+        data: { businessId: identity.businessId, fromId: existing.id, toId: snapshot.id, kind: "supersedes" },
+      });
+    } catch (error: unknown) {
+      // Concurrency (6a): a racing flip computed the same snapshot index and won — the prior
+      // state IS snapshotted (the winner's row + supersedes edge). Skip duplicating it; the
+      // live-node update below still lands this flip's new stance.
+      if (!isUniqueViolation(error)) throw error;
+    }
     superseded = true;
   }
 

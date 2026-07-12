@@ -20,16 +20,14 @@ export async function connectIntegration(
   input: { kind: string; provider: string; metric: string; config: IntegrationConfig },
 ): Promise<{ integrationId: string }> {
   const configEnc = encryptSecret(JSON.stringify(input.config)); // throws fail-closed if the key is absent
-  const existing = await prisma.integration.findFirst({
-    where: { businessId: identity.businessId, kind: input.kind, provider: input.provider } });
-  if (existing) {
-    await prisma.integration.update({ where: { id: existing.id },
-      data: { metric: input.metric, configEnc, status: "connected" } });
-    return { integrationId: existing.id };
-  }
-  const row = await prisma.integration.create({ data: {
-    businessId: identity.businessId, kind: input.kind, provider: input.provider,
-    metric: input.metric, configEnc, status: "connected" } });
+  // Native atomic upsert on the compound unique — no find-then-create TOCTOU window (6a:
+  // an unattended scheduler is a concurrent caller).
+  const row = await prisma.integration.upsert({
+    where: { businessId_kind_provider: { businessId: identity.businessId, kind: input.kind, provider: input.provider } },
+    create: { businessId: identity.businessId, kind: input.kind, provider: input.provider,
+      metric: input.metric, configEnc, status: "connected" },
+    update: { metric: input.metric, configEnc, status: "connected" },
+  });
   return { integrationId: row.id };
 }
 

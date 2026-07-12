@@ -172,6 +172,34 @@ describe("deriveCraftBeliefs", () => {
   });
 });
 
+describe("persistCraftBelief flip-path concurrency (6a)", () => {
+  beforeEach(resetBusinesses);
+
+  it("a raw duplicate snapshot sourceId violates @@unique (P2002) — the constraint the flip-path catch relies on", async () => {
+    await prisma.memoryNode.create({ data: { businessId: BIZ, type: "learning", role: "copywriter", title: "s", body: "s", confidence: 0.5, stance: "positive", sourceId: "copywriter::x::superseded::0", tainted: false } });
+    await expect(prisma.memoryNode.create({ data: { businessId: BIZ, type: "learning", role: "copywriter", title: "s2", body: "s2", confidence: 0.5, stance: "positive", sourceId: "copywriter::x::superseded::0", tainted: false } }))
+      .rejects.toMatchObject({ code: "P2002" });
+  });
+
+  it("two RACING flips of the same key: the loser's duplicate-index snapshot create is swallowed — flip still lands, no duplicate snapshot", async () => {
+    await persistCraftBelief({ businessId: BIZ }, { role: "copywriter", featureKey: "channel=linkedin", belief: positive });
+    // Fire two flips CONCURRENTLY: both read the live node (positive), both count 0 snapshots,
+    // both target ::superseded::0 — under SQLite one wins the create, the loser gets P2002.
+    const results = await Promise.allSettled([
+      persistCraftBelief({ businessId: BIZ }, { role: "copywriter", featureKey: "channel=linkedin", belief: negative }),
+      persistCraftBelief({ businessId: BIZ }, { role: "copywriter", featureKey: "channel=linkedin", belief: negative }),
+    ]);
+    // NEITHER may reject (the old code let the loser throw P2002 uncaught).
+    expect(results.every((r) => r.status === "fulfilled")).toBe(true);
+    // The live node flipped; the prior state is snapshotted at most once per computed index.
+    const live = await prisma.memoryNode.findFirst({ where: { businessId: BIZ, type: "learning", sourceId: "copywriter::channel=linkedin" } });
+    expect(live?.stance).toBe("negative");
+    const snapshots = await prisma.memoryNode.count({ where: { businessId: BIZ, type: "learning", sourceId: { startsWith: "copywriter::channel=linkedin::superseded::" } } });
+    expect(snapshots).toBeGreaterThanOrEqual(1);
+    expect(snapshots).toBeLessThanOrEqual(2); // 1 when the race collides on index 0; 2 if serialization let the loser see count=1 (both honest snapshots)
+  });
+});
+
 describe("listCraftBeliefs", () => {
   beforeEach(resetBusinesses);
 
