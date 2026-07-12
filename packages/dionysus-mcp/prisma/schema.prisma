@@ -30,6 +30,7 @@ model Business {
   memoryEdges     MemoryEdge[]
   integrations    Integration[]
   metricSnapshots MetricSnapshot[]
+  routeRevisions  RouteRevision[]
 }
 
 model Product {
@@ -289,6 +290,22 @@ model MetricSnapshot {
   metric        String
   value         Float
   capturedAt    DateTime @default(now())
+
+  @@index([businessId])
+}
+
+model RouteRevision {
+  id           String    @id @default(cuid())
+  businessId   String
+  business     Business  @relation(fields: [businessId], references: [id])
+  routeId      String
+  waypointId   String
+  priorGoal    String
+  proposedGoal String
+  rationale    String
+  status       String    // "proposed" | "approved" | "rejected"
+  createdAt    DateTime  @default(now())
+  decidedAt    DateTime?
 
   @@index([businessId])
 }
