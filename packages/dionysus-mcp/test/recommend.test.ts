@@ -8,7 +8,7 @@ const BIZ = "biz_reco_a";
 let waypointId = "";
 
 beforeEach(async () => {
-  for (const t of ["memoryEdge", "memoryNode", "routeAction", "routeWaypoint", "route", "objective"] as const) {
+  for (const t of ["memoryEdge", "memoryNode", "asset", "routeAction", "routeWaypoint", "route", "objective"] as const) {
     // @ts-expect-error dynamic model access in a test helper
     await prisma[t].deleteMany({ where: { businessId: BIZ } });
   }
@@ -52,6 +52,20 @@ describe("recommendNextAction", () => {
   it("ONE standing recommendation: a pending undrafted recommender proposal suppresses a new one", async () => {
     const first = await recommendNextAction({ businessId: BIZ });
     expect(first).not.toBeNull();
+    const second = await recommendNextAction({ businessId: BIZ });
+    expect(second).toBeNull();
+    expect(await prisma.routeAction.count({ where: { businessId: BIZ } })).toBe(1); // no pile-up
+  });
+
+  it("ONE standing recommendation: a DRAFTED-but-unreviewed proposal STILL suppresses a new one", async () => {
+    const first = await recommendNextAction({ businessId: BIZ });
+    expect(first).not.toBeNull();
+    // The nightly drafts the recommendation the same night: an Asset is produced and its id is
+    // bound to the action (assetId set). The action is still `proposed` — the founder hasn't acted
+    // on it — so it must STILL suppress a new suggestion (no pile-up on each ignored night).
+    const asset = await prisma.asset.create({ data: { businessId: BIZ, routeActionId: first!.actionId, channel: first!.channel, kind: "post", contentJson: "{}" } });
+    await prisma.routeAction.update({ where: { id: first!.actionId }, data: { assetId: asset.id } });
+
     const second = await recommendNextAction({ businessId: BIZ });
     expect(second).toBeNull();
     expect(await prisma.routeAction.count({ where: { businessId: BIZ } })).toBe(1); // no pile-up

@@ -30,9 +30,12 @@ export async function recommendNextAction(identity: Identity): Promise<Recommend
     where: { businessId, routeId: route.id, status: "active" }, orderBy: { order: "asc" } });
   if (!waypoint) return null;
 
-  // ONE standing recommendation: a pending (proposed, undrafted) recommender action suppresses a new one.
+  // ONE standing recommendation at a time — drafted or not. Any `proposed` recommender action
+  // suppresses a new one; a fresh suggestion appears only after the founder ACTS on the last one
+  // (approve/reject clears `proposed`). Not gating on assetId is what stops a drafted-but-unreviewed
+  // recommendation from letting each ignored night pile another proposal onto the founder's queue.
   const standing = await prisma.routeAction.findFirst({
-    where: { businessId, status: "proposed", assetId: null, featuresJson: { contains: '"recommender":true' } } });
+    where: { businessId, status: "proposed", featuresJson: { contains: '"recommender":true' } } });
   if (standing) return null;
 
   // Candidates: channels seen in this business's history + the default explore set.
