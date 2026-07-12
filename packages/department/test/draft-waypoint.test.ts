@@ -386,6 +386,67 @@ describe("draftWaypoint recall resilience — a graph recall throw never breaks 
   });
 });
 
+// Stage 6b Task 3: founder edits are sacred. draftWaypoint must NEVER re-draft a proposed
+// action that ALREADY has a bound asset (assetId set) — a redraft would create a fresh asset
+// and overwrite the founder's 4b edit rebinding, orphaning their edits. The actions query is
+// scoped to status "proposed" AND assetId null so a nightly redraft only ever touches the
+// still-undrafted proposals. Seed TWO proposed actions on one waypoint, bind an asset to one
+// (create an Asset row + set assetId, simulating a founder-edited draft), then draft: the bound
+// action is left byte-for-byte alone; only the assetless one is drafted.
+describe("draftWaypoint — a bound proposal is never re-drafted (founder edits are sacred)", () => {
+  const BOUND = { businessId: "biz_draft_bound" };
+  let boundWpId = "";
+  let boundActionId = "";
+  let unboundActionId = "";
+  let originalAssetId = "";
+
+  beforeAll(async () => {
+    await prisma.memoryEdge.deleteMany({ where: { businessId: BOUND.businessId } });
+    await prisma.memoryNode.deleteMany({ where: { businessId: BOUND.businessId } });
+    await prisma.asset.deleteMany({ where: { businessId: BOUND.businessId } });
+    await prisma.routeAction.deleteMany({ where: { businessId: BOUND.businessId } });
+    await prisma.routeWaypoint.deleteMany({ where: { businessId: BOUND.businessId } });
+    await prisma.route.deleteMany({ where: { businessId: BOUND.businessId } });
+    await prisma.objective.deleteMany({ where: { businessId: BOUND.businessId } });
+    await prisma.business.upsert({ where: { id: BOUND.businessId },
+      create: { id: BOUND.businessId, name: "Bound Co", maxTokensPerDay: 100000 },
+      update: { maxTokensPerDay: 100000 } });
+    const obj = await prisma.objective.create({ data: { businessId: BOUND.businessId, kind: "signups", target: "100", metric: "users", status: "active" } });
+    const route = await prisma.route.create({ data: { businessId: BOUND.businessId, objectiveId: obj.id, source: "case", status: "proposed" } });
+    const wp = await prisma.routeWaypoint.create({ data: { businessId: BOUND.businessId, routeId: route.id, order: 1, title: "Launch", goal: "20 signups", status: "active" } });
+    boundWpId = wp.id;
+    // Two proposed actions on the SAME waypoint.
+    const bound = await prisma.routeAction.create({ data: { businessId: BOUND.businessId, waypointId: wp.id, employeeRole: "copywriter", type: "post", status: "proposed", featuresJson: JSON.stringify({ channel: "hackernews" }) } });
+    const unbound = await prisma.routeAction.create({ data: { businessId: BOUND.businessId, waypointId: wp.id, employeeRole: "copywriter", type: "post", status: "proposed", featuresJson: JSON.stringify({ channel: "x" }) } });
+    boundActionId = bound.id;
+    unboundActionId = unbound.id;
+    // Simulate a founder-edited draft already bound to the first action: create an Asset row
+    // and set the action's assetId to it (the 4b rebind-on-edit state a redraft would orphan).
+    const asset = await prisma.asset.create({ data: { businessId: BOUND.businessId, routeActionId: bound.id, channel: "hackernews", kind: "post", contentJson: JSON.stringify({ title: "Founder edit", body: "Founder-edited body" }) } });
+    originalAssetId = asset.id;
+    await prisma.routeAction.update({ where: { id: bound.id }, data: { assetId: asset.id } });
+  });
+
+  it("never re-drafts a proposed action that already has a bound asset; only the assetless one is drafted", async () => {
+    const res = await draftWaypoint(BOUND, { waypointId: boundWpId }, { harness: fakeHarness(), models: { brain: "fake" } });
+
+    // (a) DraftResult contains ONLY the newly drafted (assetless) action — the bound one is skipped.
+    expect(res.drafts).toHaveLength(1);
+    expect(res.drafts[0]!.actionId).toBe(unboundActionId);
+
+    // (b) the bound action's assetId is BYTE-UNCHANGED (the founder's edit binding survives).
+    const boundAction = await prisma.routeAction.findUnique({ where: { id: boundActionId } });
+    expect(boundAction?.assetId).toBe(originalAssetId);
+    // and its asset count is still exactly 1 — no fresh asset was created for it.
+    expect(await prisma.asset.count({ where: { routeActionId: boundActionId } })).toBe(1);
+
+    // (c) the assetless action DID get drafted — it now has an asset bound.
+    const unboundAction = await prisma.routeAction.findUnique({ where: { id: unboundActionId } });
+    expect(unboundAction?.assetId).toBeTruthy();
+    expect(await prisma.asset.count({ where: { routeActionId: unboundActionId } })).toBe(1);
+  });
+});
+
 // 5c: draftWaypoint derives craft beliefs (best-effort) then recalls them as labeled hypotheses.
 describe("draftWaypoint craft-belief recall (5c)", () => {
   const LEARN = { businessId: "biz_draft_learn" };

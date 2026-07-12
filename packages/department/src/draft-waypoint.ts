@@ -62,8 +62,11 @@ export async function draftWaypoint(identity: Identity, input: { waypointId: str
   const wp = await prisma.routeWaypoint.findFirst({ where: { id: input.waypointId, businessId: identity.businessId } });
   if (!wp) throw new Error(`Waypoint ${input.waypointId} not found in this business scope.`);
 
+  // Proposed AND not-yet-drafted (assetId null): a bound asset may carry founder edits — 4b
+  // rebinds the asset on edit — so a nightly redraft must NEVER re-draft a bound proposal and
+  // orphan those edits (founder edits are sacred).
   const actions = await prisma.routeAction.findMany({
-    where: { waypointId: input.waypointId, businessId: identity.businessId, status: "proposed" } });
+    where: { waypointId: input.waypointId, businessId: identity.businessId, status: "proposed", assetId: null } });
 
   // Stage 5b: recall the route so far. MIRROR-then-READ, hoisted ONCE before the fan-out
   // (the route context is identical for every action of this waypoint). mirrorPlanToGraph
