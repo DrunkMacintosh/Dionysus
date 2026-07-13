@@ -35,6 +35,33 @@ function fakeHarness(): Harness {
   };
 }
 
+describe("draftWaypoint never drafts a cro-fix (6e)", () => {
+  it("skips an assetless proposed cro-fix action — a CRO artifact is never copywriter content", async () => {
+    const CRO = { businessId: "biz_draft_crofix" };
+    await prisma.asset.deleteMany({ where: { businessId: CRO.businessId } });
+    await prisma.routeAction.deleteMany({ where: { businessId: CRO.businessId } });
+    await prisma.routeWaypoint.deleteMany({ where: { businessId: CRO.businessId } });
+    await prisma.route.deleteMany({ where: { businessId: CRO.businessId } });
+    await prisma.objective.deleteMany({ where: { businessId: CRO.businessId } });
+    await prisma.business.upsert({ where: { id: CRO.businessId },
+      create: { id: CRO.businessId, name: "Cro Co", maxTokensPerDay: 100000 }, update: { maxTokensPerDay: 100000 } });
+    const obj = await prisma.objective.create({ data: { businessId: CRO.businessId, kind: "signups", target: "100", metric: "users", status: "active" } });
+    const route = await prisma.route.create({ data: { businessId: CRO.businessId, objectiveId: obj.id, source: "case", status: "proposed" } });
+    const wp = await prisma.routeWaypoint.create({ data: { businessId: CRO.businessId, routeId: route.id, order: 1, title: "Launch", goal: "g", status: "active" } });
+    // A proposed cro-fix with NO asset (e.g. a partial persist failure) + a normal post to draft.
+    await prisma.routeAction.create({ data: { businessId: CRO.businessId, waypointId: wp.id, employeeRole: "conversion-optimizer", type: "cro-fix", status: "proposed", featuresJson: JSON.stringify({ channel: "landing-page", cro: true }) } });
+    await prisma.routeAction.create({ data: { businessId: CRO.businessId, waypointId: wp.id, employeeRole: "copywriter", type: "post", status: "proposed", featuresJson: JSON.stringify({ channel: "x" }) } });
+
+    const res = await draftWaypoint(CRO, { waypointId: wp.id }, { harness: fakeHarness(), models: { brain: "fake" } });
+    // ONLY the post was drafted; the cro-fix was left untouched (no wrong-role draft, no asset).
+    expect(res.drafts).toHaveLength(1);
+    expect(res.drafts[0]?.channel).toBe("x");
+    const croAction = await prisma.routeAction.findFirst({ where: { businessId: CRO.businessId, type: "cro-fix" } });
+    expect(croAction?.assetId).toBeNull();
+    expect(await prisma.asset.count({ where: { businessId: CRO.businessId } })).toBe(1);
+  });
+});
+
 describe("draftWaypoint (parallel fan-out)", () => {
   it("drafts one channel-native asset per proposed action, linked + assetId set", async () => {
     const res = await draftWaypoint(IDENTITY, { waypointId }, { harness: fakeHarness(), models: { brain: "fake" } });
