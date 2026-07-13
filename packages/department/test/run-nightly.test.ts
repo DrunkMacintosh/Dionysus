@@ -108,6 +108,15 @@ describe("runNightly", () => {
     expect(res.cro).toBeDefined();
     expect(res.cro).toMatchObject({ status: "skipped", reason: "no traffic-without-conversion signal" });
   });
+
+  it("the outreach section skips (honestly) when the founder has queued no pitch requests", async () => {
+    // The standard fixture (Alpha Co) has ZERO founder pitch requests → runOutreach's pending-check
+    // returns skipped BEFORE any budget/fetch/model call. Founder-targeted only: with no request,
+    // Dionysus never invents a target. (The drafting path — a readable, grounded target — is the T4 gate's job.)
+    const res = await runNightly(A, { harness: goodHarness(), models: { brain: "fake" }, hnTransport });
+    expect(res.outreach).toBeDefined();
+    expect(res.outreach).toMatchObject({ status: "skipped", reason: "no pitch requests pending" });
+  });
 });
 
 // ── Stage 6f: the nightly PLAN section (bootstrap the first route) ────────────

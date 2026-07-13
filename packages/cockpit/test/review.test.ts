@@ -323,6 +323,66 @@ describe("cro-fix send-queue exclusion / drafts inclusion", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Outreach send-queue exclusion (Stage 6g, Task 3) — an outreach-pitch asset is a
+// PRIVATE email the founder sends by hand from their own mail client; it has no
+// public URL to verify, so listSendQueue EXCLUDES kind:"outreach-pitch" (the cro-fix
+// apply-checklist semantics). listProposedDrafts stays INCLUSIVE so the drafted pitch
+// still reaches /drafts for founder review.
+// ---------------------------------------------------------------------------
+const SENDPITCH = { businessId: "biz_cockpit_sendpitch" };
+
+describe("outreach-pitch send-queue exclusion / drafts inclusion", () => {
+  let approvedPostId = "";
+  let approvedPitchId = "";
+  let proposedPitchId = "";
+
+  beforeAll(async () => {
+    await prisma.asset.deleteMany({ where: { businessId: SENDPITCH.businessId } });
+    await prisma.routeAction.deleteMany({ where: { businessId: SENDPITCH.businessId } });
+    await prisma.routeWaypoint.deleteMany({ where: { businessId: SENDPITCH.businessId } });
+    await prisma.route.deleteMany({ where: { businessId: SENDPITCH.businessId } });
+    await prisma.objective.deleteMany({ where: { businessId: SENDPITCH.businessId } });
+    await prisma.business.upsert({ where: { id: SENDPITCH.businessId }, create: { id: SENDPITCH.businessId, name: SENDPITCH.businessId }, update: {} });
+    const obj = await prisma.objective.create({ data: { businessId: SENDPITCH.businessId, kind: "signups", target: "100", metric: "users", status: "active" } });
+    const route = await prisma.route.create({ data: { businessId: SENDPITCH.businessId, objectiveId: obj.id, source: "case", status: "active" } });
+    const wp = await prisma.routeWaypoint.create({ data: { businessId: SENDPITCH.businessId, routeId: route.id, order: 1, title: "Launch", goal: "go live", status: "active" } });
+
+    // Assets bind only while "proposed" (setActionAsset's bind-guard): bind first, then move status.
+    const seedBound = async (type: string, channel: string, kind: string, content: { title?: string; body?: string }) => {
+      const action = await prisma.routeAction.create({ data: { businessId: SENDPITCH.businessId, waypointId: wp.id, employeeRole: type === "outreach-pitch" ? "outreach" : "copywriter", type, status: "proposed" } });
+      const { assetId } = await persistAsset(SENDPITCH, { channel, kind, content, routeActionId: action.id });
+      await setActionAsset(SENDPITCH, action.id, assetId);
+      return action.id;
+    };
+
+    // A normal approved post (a real send) → MUST appear in the send queue.
+    approvedPostId = await seedBound("post", "hackernews", "post", { title: "Show HN", body: "We built X" });
+    await prisma.routeAction.update({ where: { id: approvedPostId }, data: { status: "approved" } });
+
+    // An APPROVED outreach-pitch (a private email) → no public URL to verify → EXCLUDED from the queue.
+    approvedPitchId = await seedBound("outreach-pitch", "outreach-email", "outreach-pitch", { title: "A pitch", body: "Hi, I loved your work on X." });
+    await prisma.routeAction.update({ where: { id: approvedPitchId }, data: { status: "approved" } });
+
+    // A PROPOSED outreach-pitch → still reaches /drafts for review (inclusive).
+    proposedPitchId = await seedBound("outreach-pitch", "outreach-email", "outreach-pitch", { title: "Another pitch", body: "Hi, your piece on Y stood out." });
+  });
+
+  it("listSendQueue excludes the approved outreach-pitch while the normal approved post still appears", async () => {
+    const queue = await listSendQueue(SENDPITCH);
+    const ids = queue.map((c) => c.actionId);
+    expect(ids).toContain(approvedPostId);        // a real send stays sendable
+    expect(ids).not.toContain(approvedPitchId);   // a private email is founder-sent, not a queue send
+  });
+
+  it("listProposedDrafts stays inclusive — the proposed outreach-pitch reaches /drafts for review", async () => {
+    const drafts = await listProposedDrafts(SENDPITCH);
+    const card = drafts.find((d) => d.actionId === proposedPitchId);
+    expect(card).toBeDefined();
+    expect(card).toMatchObject({ type: "outreach-pitch", channel: "outreach-email", title: "Another pitch" });
+  });
+});
+
 describe("isRenderableHttpUrl (verified-history href guard)", () => {
   it("accepts http/https and rejects javascript:/data:/garbage/empty (stored-XSS guard)", () => {
     expect(isRenderableHttpUrl("https://example.com/x")).toBe(true);

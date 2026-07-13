@@ -62,6 +62,33 @@ describe("draftWaypoint never drafts a cro-fix (6e)", () => {
   });
 });
 
+describe("draftWaypoint never drafts an outreach-pitch (6g)", () => {
+  it("skips an assetless proposed outreach-pitch — an outreach artifact is never copywriter content", async () => {
+    const PITCH = { businessId: "biz_draft_pitch" };
+    await prisma.asset.deleteMany({ where: { businessId: PITCH.businessId } });
+    await prisma.routeAction.deleteMany({ where: { businessId: PITCH.businessId } });
+    await prisma.routeWaypoint.deleteMany({ where: { businessId: PITCH.businessId } });
+    await prisma.route.deleteMany({ where: { businessId: PITCH.businessId } });
+    await prisma.objective.deleteMany({ where: { businessId: PITCH.businessId } });
+    await prisma.business.upsert({ where: { id: PITCH.businessId },
+      create: { id: PITCH.businessId, name: "Pitch Co", maxTokensPerDay: 100000 }, update: { maxTokensPerDay: 100000 } });
+    const obj = await prisma.objective.create({ data: { businessId: PITCH.businessId, kind: "signups", target: "100", metric: "users", status: "active" } });
+    const route = await prisma.route.create({ data: { businessId: PITCH.businessId, objectiveId: obj.id, source: "case", status: "proposed" } });
+    const wp = await prisma.routeWaypoint.create({ data: { businessId: PITCH.businessId, routeId: route.id, order: 1, title: "Launch", goal: "g", status: "active" } });
+    // A proposed outreach-pitch with NO asset (drafted by runOutreach, not the copywriter) + a normal post to draft.
+    await prisma.routeAction.create({ data: { businessId: PITCH.businessId, waypointId: wp.id, employeeRole: "outreach", type: "outreach-pitch", status: "proposed", featuresJson: JSON.stringify({ channel: "outreach-email", outreach: true, targetUrl: "https://example.com/x", targetName: "A Target" }) } });
+    await prisma.routeAction.create({ data: { businessId: PITCH.businessId, waypointId: wp.id, employeeRole: "copywriter", type: "post", status: "proposed", featuresJson: JSON.stringify({ channel: "x" }) } });
+
+    const res = await draftWaypoint(PITCH, { waypointId: wp.id }, { harness: fakeHarness(), models: { brain: "fake" } });
+    // ONLY the post was drafted; the outreach-pitch was left untouched (no wrong-role draft, no asset).
+    expect(res.drafts).toHaveLength(1);
+    expect(res.drafts[0]?.channel).toBe("x");
+    const pitchAction = await prisma.routeAction.findFirst({ where: { businessId: PITCH.businessId, type: "outreach-pitch" } });
+    expect(pitchAction?.assetId).toBeNull();
+    expect(await prisma.asset.count({ where: { businessId: PITCH.businessId } })).toBe(1);
+  });
+});
+
 describe("draftWaypoint (parallel fan-out)", () => {
   it("drafts one channel-native asset per proposed action, linked + assetId set", async () => {
     const res = await draftWaypoint(IDENTITY, { waypointId }, { harness: fakeHarness(), models: { brain: "fake" } });

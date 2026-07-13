@@ -64,11 +64,12 @@ export async function draftWaypoint(identity: Identity, input: { waypointId: str
 
   // Proposed AND not-yet-drafted (assetId null): a bound asset may carry founder edits — 4b
   // rebinds the asset on edit — so a nightly redraft must NEVER re-draft a bound proposal and
-  // orphan those edits (founder edits are sacred). Also EXCLUDE cro-fix (6e): a conversion-fix
-  // is the CRO's own artifact, never copywriter content — an assetless one (e.g. from a partial
-  // persist failure) must not be re-drafted into a semantically-wrong post.
+  // orphan those edits (founder edits are sacred). Also EXCLUDE cro-fix (6e) and outreach-pitch
+  // (6g): a conversion-fix is the CRO's own artifact and an outreach pitch is runOutreach's own
+  // (page-grounded) artifact — neither is copywriter content, so an assetless one (e.g. from a
+  // partial persist failure) must not be re-drafted into a semantically-wrong post.
   const actions = await prisma.routeAction.findMany({
-    where: { waypointId: input.waypointId, businessId: identity.businessId, status: "proposed", assetId: null, type: { not: "cro-fix" } } });
+    where: { waypointId: input.waypointId, businessId: identity.businessId, status: "proposed", assetId: null, type: { notIn: ["cro-fix", "outreach-pitch"] } } });
 
   // Stage 5b: recall the route so far. MIRROR-then-READ, hoisted ONCE before the fan-out
   // (the route context is identical for every action of this waypoint). mirrorPlanToGraph
