@@ -32,6 +32,15 @@ function firstLine(message: string): string {
   return message.split("\n")[0]!.trim();
 }
 
+/**
+ * Scrub URL userinfo (user[:password]@host) from an error message before surfacing it.
+ * Preflight output gets pasted into reports/issues (the runbook says so) — a driver error's
+ * first line can embed a connection URL whose userinfo must never travel with it.
+ */
+function scrubUserinfo(message: string): string {
+  return message.replace(/\/\/[^@/\s]+@/g, "//***@");
+}
+
 /** The default probe lazily imports prisma so unit tests (which inject a stub) never load the DB. */
 async function defaultDbProbe(): Promise<void> {
   const { prisma } = await import("../db.js");
@@ -54,7 +63,7 @@ async function commonChecks(
     await dbProbe();
     checks.push(check("common", "database reachable", true, "reachable"));
   } catch (err) {
-    const message = firstLine(err instanceof Error ? err.message : String(err));
+    const message = scrubUserinfo(firstLine(err instanceof Error ? err.message : String(err)));
     checks.push(check("common", "database reachable", false, `unreachable: ${message}`));
   }
 

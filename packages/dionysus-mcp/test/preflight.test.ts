@@ -93,6 +93,17 @@ describe("runPreflight (fail-closed doctor)", () => {
     for (const c of report.checks) expect(c.detail).not.toContain("    at ");
   });
 
+  it("5b. a probe error embedding a connection URL has its userinfo SCRUBBED (output gets pasted into reports)", async () => {
+    const failingProbe = () =>
+      Promise.reject(new Error("P1000: auth failed against postgres://admin:redacted@db.example.com:5432/prod"));
+    const report = await runPreflight({ env: greenEnv(), dbProbe: failingProbe });
+    const dbCheck = report.checks.find((c) => c.name.toLowerCase().includes("reachable"));
+    expect(dbCheck?.ok).toBe(false);
+    expect(dbCheck!.detail).not.toContain("admin"); // the userinfo never travels
+    expect(dbCheck!.detail).toContain("//***@"); // visibly scrubbed, host kept for diagnostics
+    expect(dbCheck!.detail).toContain("db.example.com"); // the useful part survives
+  });
+
   it("6. SECRETS NEVER SURFACE: distinctive secret values across every service never appear in the report JSON", async () => {
     const secrets = {
       DATABASE_URL: "file:./sk-DBSECRET-000000.db",
