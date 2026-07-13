@@ -5,7 +5,7 @@ import { recordSimulation } from "dionysus-mcp/tools/simulation";
 import { recordObservation } from "dionysus-mcp/tools/memory";
 import { createObjective, persistRoute, persistWaypoint, upsertRouteAction } from "dionysus-mcp/tools/plan";
 import { approveAction, startExecution, completeExecution } from "dionysus-mcp/tools/lifecycle";
-import { listProposedDrafts, getRouteOverview, getDigestHeader, listSendQueue, listExecuted, isRenderableHttpUrl, listRadarObservations, getCmoReport, getTimeline, getCraftBeliefs, getIntegrations, getRoutePendingRevision } from "../src/lib/review";
+import { listProposedDrafts, getRouteOverview, getDigestHeader, listSendQueue, listExecuted, isRenderableHttpUrl, listRadarObservations, getCmoReport, getTimeline, getCraftBeliefs, getIntegrations, getRoutePendingRevision, getActiveObjective } from "../src/lib/review";
 import { persistCraftBelief } from "dionysus-mcp/tools/belief-graph";
 import { connectIntegration } from "dionysus-mcp/tools/integration";
 import { proposeRouteRevision } from "dionysus-mcp/tools/route-revision";
@@ -602,5 +602,60 @@ describe("route-revision surface (getRoutePendingRevision + timeline revisions)"
     // Scoped: A's revision never surfaces on B's timeline.
     const otherTimeline = await getTimeline(REVO);
     expect(otherTimeline.waypoints.every((w) => w.revisions.length === 0)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Active-objective read (Stage 6f, Task 2) — the read behind the "/setup" page.
+// getActiveObjective returns the tenant's ONE active objective (status "active",
+// newest-first) as the founder-facing summary, or null. Scoped like the other
+// cockpit reads: another tenant's objective never leaks, and a done/paused
+// objective is NOT returned (the status filter, not just recency).
+// ---------------------------------------------------------------------------
+const OBJ = { businessId: "biz_cockpit_activeobj" };
+const OBJO = { businessId: "biz_cockpit_activeobj_other" };
+const OBJN = { businessId: "biz_cockpit_activeobj_none" };
+
+describe("getActiveObjective (the /setup read)", () => {
+  let activeId = "";
+  let doneId = "";
+  let pausedId = "";
+  let otherActiveId = "";
+
+  beforeAll(async () => {
+    for (const id of [OBJ.businessId, OBJO.businessId, OBJN.businessId]) {
+      await prisma.route.deleteMany({ where: { businessId: id } });
+      await prisma.objective.deleteMany({ where: { businessId: id } });
+      await prisma.business.upsert({ where: { id }, create: { id, name: id }, update: {} });
+    }
+    // OBJ: exactly one active objective, plus a done and a paused one seeded LATER (newer
+    // createdAt) — so the status filter (not recency) is what excludes them.
+    activeId = (await prisma.objective.create({ data: { businessId: OBJ.businessId, kind: "signups", target: "100", metric: "users", status: "active" } })).id;
+    doneId = (await prisma.objective.create({ data: { businessId: OBJ.businessId, kind: "old-goal", target: "9", metric: "done-metric", status: "done" } })).id;
+    pausedId = (await prisma.objective.create({ data: { businessId: OBJ.businessId, kind: "held-goal", target: "5", metric: "paused-metric", status: "paused" } })).id;
+    // OBJO: its OWN active objective — proves OBJ's "signups" never leaks into OBJO's read.
+    otherActiveId = (await prisma.objective.create({ data: { businessId: OBJO.businessId, kind: "growth", target: "500", metric: "revenue", status: "active" } })).id;
+    // OBJN: only a done objective — getActiveObjective must return null (non-vacuous status filter).
+    await prisma.objective.create({ data: { businessId: OBJN.businessId, kind: "archived", target: "1", metric: "x", status: "done" } });
+  });
+
+  it("returns the active objective scoped, with the summary fields", async () => {
+    const obj = await getActiveObjective(OBJ);
+    expect(obj).not.toBeNull();
+    expect(obj).toMatchObject({ id: activeId, kind: "signups", target: "100", metric: "users" });
+    expect(obj!.createdAt).toBeInstanceOf(Date);
+  });
+
+  it("does NOT return a done or paused objective (status filter, not recency)", async () => {
+    const obj = await getActiveObjective(OBJ);
+    expect(obj!.id).not.toBe(doneId);
+    expect(obj!.id).not.toBe(pausedId);
+    // A tenant whose only objective is done → null.
+    expect(await getActiveObjective(OBJN)).toBeNull();
+  });
+
+  it("is identity-scoped — another tenant's active objective never leaks", async () => {
+    expect((await getActiveObjective(OBJO))!.id).toBe(otherActiveId);
+    expect((await getActiveObjective(OBJ))!.id).toBe(activeId); // OBJO's "growth" never surfaces here
   });
 });

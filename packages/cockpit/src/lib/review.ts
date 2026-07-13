@@ -191,6 +191,24 @@ export async function getRouteOverview(identity: Identity): Promise<RouteOvervie
 }
 
 // ---------------------------------------------------------------------------
+// Active-objective read (Stage 6f, Task 2) — the read behind the "/setup" page.
+// Returns the tenant's ONE active objective (the dogfood simplification: at most
+// one active) as the founder-facing summary, or null when none is set. Scoped by
+// businessId, status "active" (a done/paused objective is NOT returned), newest-
+// first. Identity is a PARAMETER (cockpit convention — the page calls
+// requireSession and passes it). NOT an MCP tool (the whitelist stays 11).
+// ---------------------------------------------------------------------------
+export type ActiveObjective = { id: string; kind: string; target: string; metric: string; createdAt: Date };
+
+export async function getActiveObjective(identity: Identity): Promise<ActiveObjective | null> {
+  const objective = await prisma.objective.findFirst({
+    where: { businessId: identity.businessId, status: "active" },
+    orderBy: { createdAt: "desc" } });
+  if (!objective) return null;
+  return { id: objective.id, kind: objective.kind, target: objective.target, metric: objective.metric, createdAt: objective.createdAt };
+}
+
+// ---------------------------------------------------------------------------
 // Radar surface (Task 7) — the read-side for the cockpit "What I noticed" page.
 // listRadarObservations is a thin, identity-scoped wrapper over the mcp
 // listObservations, returning the founder-facing view of radar-sensed
