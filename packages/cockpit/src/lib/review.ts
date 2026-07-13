@@ -344,6 +344,40 @@ export async function getRoutePendingRevision(identity: Identity): Promise<Pendi
   return { ...pending, routeId: route.id };
 }
 
+// ---------------------------------------------------------------------------
+// Pitch requests surface (Stage 6g, Task 2) — the read behind the "/pitch" page.
+// listPitchRequests returns the founder's proposed `outreach-pitch` requests with the
+// target fields (targetName/targetUrl) parsed DEFENSIVELY from featuresJson: a malformed
+// or target-less row is SKIPPED, never a crash (the parsed-null lesson, taken to skip
+// because a request with no parseable target is not renderable). `drafted` flips true
+// once the nightly binds an asset. Newest-first, identity-scoped (another tenant's request
+// never leaks). Founder-targeted only — these exist ONLY because the founder created them.
+// NOT an MCP tool (the whitelist stays 11).
+// ---------------------------------------------------------------------------
+export type PitchRequestCard = { actionId: string; targetName: string; targetUrl: string; drafted: boolean; createdAt: Date };
+
+export async function listPitchRequests(identity: Identity): Promise<PitchRequestCard[]> {
+  const actions = await prisma.routeAction.findMany({
+    where: { businessId: identity.businessId, status: "proposed", type: "outreach-pitch" },
+    orderBy: { createdAt: "desc" },
+  });
+  const cards: PitchRequestCard[] = [];
+  for (const action of actions) {
+    let targetName: string | null = null;
+    let targetUrl: string | null = null;
+    try {
+      const f = JSON.parse(action.featuresJson) as { targetName?: unknown; targetUrl?: unknown };
+      targetName = typeof f.targetName === "string" ? f.targetName : null;
+      targetUrl = typeof f.targetUrl === "string" ? f.targetUrl : null;
+    } catch {
+      /* malformed featuresJson → skip this row, never crash the list */
+    }
+    if (!targetName || !targetUrl) continue; // a request without a parseable target is not renderable
+    cards.push({ actionId: action.id, targetName, targetUrl, drafted: action.assetId !== null, createdAt: action.createdAt });
+  }
+  return cards;
+}
+
 export type DigestHeader = { digestId: string; date: string; itemCount: number; reviewedAt: Date | null; openCount: number };
 
 export async function getDigestHeader(identity: Identity): Promise<DigestHeader> {

@@ -5,7 +5,7 @@ import { recordSimulation } from "dionysus-mcp/tools/simulation";
 import { recordObservation } from "dionysus-mcp/tools/memory";
 import { createObjective, persistRoute, persistWaypoint, upsertRouteAction } from "dionysus-mcp/tools/plan";
 import { approveAction, startExecution, completeExecution } from "dionysus-mcp/tools/lifecycle";
-import { listProposedDrafts, getRouteOverview, getDigestHeader, listSendQueue, listExecuted, isRenderableHttpUrl, listRadarObservations, getCmoReport, getTimeline, getCraftBeliefs, getIntegrations, getRoutePendingRevision, getActiveObjective } from "../src/lib/review";
+import { listProposedDrafts, getRouteOverview, getDigestHeader, listSendQueue, listExecuted, isRenderableHttpUrl, listRadarObservations, getCmoReport, getTimeline, getCraftBeliefs, getIntegrations, getRoutePendingRevision, getActiveObjective, listPitchRequests } from "../src/lib/review";
 import { persistCraftBelief } from "dionysus-mcp/tools/belief-graph";
 import { connectIntegration } from "dionysus-mcp/tools/integration";
 import { proposeRouteRevision } from "dionysus-mcp/tools/route-revision";
@@ -657,5 +657,76 @@ describe("getActiveObjective (the /setup read)", () => {
   it("is identity-scoped — another tenant's active objective never leaks", async () => {
     expect((await getActiveObjective(OBJO))!.id).toBe(otherActiveId);
     expect((await getActiveObjective(OBJ))!.id).toBe(activeId); // OBJO's "growth" never surfaces here
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pitch requests service (Stage 6g, Task 2) — the read behind the "/pitch" page.
+// listPitchRequests returns the founder's proposed outreach-pitch requests with the
+// target fields parsed from featuresJson (DEFENSIVELY — a malformed row is skipped,
+// never a crash), `drafted` flips true once the nightly binds an asset, newest-first,
+// identity-scoped (another tenant's request never leaks). Founder-targeted only: these
+// requests exist ONLY because the founder created them on /pitch.
+// ---------------------------------------------------------------------------
+const PITCH = { businessId: "biz_cockpit_pitch" };
+const PITCHO = { businessId: "biz_cockpit_pitch_other" };
+
+describe("listPitchRequests (the /pitch read)", () => {
+  let undraftedId = "";
+  let draftedId = "";
+
+  beforeAll(async () => {
+    for (const id of [PITCH.businessId, PITCHO.businessId]) {
+      await prisma.asset.deleteMany({ where: { businessId: id } });
+      await prisma.routeAction.deleteMany({ where: { businessId: id } });
+      await prisma.routeWaypoint.deleteMany({ where: { businessId: id } });
+      await prisma.route.deleteMany({ where: { businessId: id } });
+      await prisma.objective.deleteMany({ where: { businessId: id } });
+      await prisma.business.upsert({ where: { id }, create: { id, name: id }, update: {} });
+    }
+    const obj = await prisma.objective.create({ data: { businessId: PITCH.businessId, kind: "signups", target: "100", metric: "users", status: "active" } });
+    const route = await prisma.route.create({ data: { businessId: PITCH.businessId, objectiveId: obj.id, source: "case", status: "active" } });
+    const wp = await prisma.routeWaypoint.create({ data: { businessId: PITCH.businessId, routeId: route.id, order: 1, title: "Launch", goal: "go live", status: "active" } });
+
+    // An undrafted pitch request (created FIRST → older createdAt).
+    undraftedId = (await upsertRouteAction(PITCH, { waypointId: wp.id, employeeRole: "outreach", type: "outreach-pitch", rationale: "Pitch Newsletter A (founder-requested)", features: { channel: "outreach-email", outreach: true, targetUrl: "https://newsletter-a.example.com", targetName: "Newsletter A" } })).actionId;
+    await new Promise((r) => setTimeout(r, 5)); // strictly later createdAt so newest-first is deterministic
+
+    // A DRAFTED pitch request (created SECOND → newer) with a bound asset — `drafted` must flip true.
+    draftedId = (await upsertRouteAction(PITCH, { waypointId: wp.id, employeeRole: "outreach", type: "outreach-pitch", rationale: "Pitch Podcast B (founder-requested)", features: { channel: "outreach-email", outreach: true, targetUrl: "https://podcast-b.example.com", targetName: "Podcast B" } })).actionId;
+    const { assetId } = await persistAsset(PITCH, { channel: "outreach-email", kind: "outreach-pitch", content: { title: "Hi there", body: "a grounded pitch body" }, routeActionId: draftedId });
+    await setActionAsset(PITCH, draftedId, assetId);
+
+    // A MALFORMED-features row — must be SKIPPED (parsed defensively), never crash the list.
+    await prisma.routeAction.create({ data: { businessId: PITCH.businessId, waypointId: wp.id, employeeRole: "outreach", type: "outreach-pitch", status: "proposed", featuresJson: "{not valid json" } });
+
+    // PITCHO: its OWN pitch request — proves PITCH's requests never leak into PITCHO's read (non-vacuous scope).
+    const objO = await prisma.objective.create({ data: { businessId: PITCHO.businessId, kind: "signups", target: "1", metric: "x", status: "active" } });
+    const routeO = await prisma.route.create({ data: { businessId: PITCHO.businessId, objectiveId: objO.id, source: "case", status: "active" } });
+    const wpO = await prisma.routeWaypoint.create({ data: { businessId: PITCHO.businessId, routeId: routeO.id, order: 1, title: "Their launch", goal: "their goal", status: "active" } });
+    await upsertRouteAction(PITCHO, { waypointId: wpO.id, employeeRole: "outreach", type: "outreach-pitch", features: { channel: "outreach-email", outreach: true, targetUrl: "https://their-target.example.com", targetName: "Their target" } });
+  });
+
+  it("returns proposed outreach-pitch requests with parsed target fields, newest-first, drafted flag set", async () => {
+    const requests = await listPitchRequests(PITCH);
+    expect(requests).toHaveLength(2); // the malformed row is skipped, not counted
+    // newest-first: the drafted request (created second) leads.
+    expect(requests[0]).toMatchObject({ actionId: draftedId, targetName: "Podcast B", targetUrl: "https://podcast-b.example.com", drafted: true });
+    expect(requests[1]).toMatchObject({ actionId: undraftedId, targetName: "Newsletter A", targetUrl: "https://newsletter-a.example.com", drafted: false });
+    expect(requests[0]!.createdAt).toBeInstanceOf(Date);
+  });
+
+  it("skips the malformed-features row without crashing (defensive parse)", async () => {
+    // The list resolves (does not throw) and simply omits the un-parseable request.
+    const requests = await listPitchRequests(PITCH);
+    expect(requests.every((r) => typeof r.targetName === "string" && r.targetName.length > 0)).toBe(true);
+    expect(requests.every((r) => typeof r.targetUrl === "string" && r.targetUrl.length > 0)).toBe(true);
+  });
+
+  it("is identity-scoped — another tenant's pitch request never leaks", async () => {
+    const requests = await listPitchRequests(PITCHO);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.targetName).toBe("Their target");
+    expect(requests.some((r) => r.actionId === draftedId || r.actionId === undraftedId)).toBe(false);
   });
 });
