@@ -74,6 +74,19 @@ async function commonChecks(
 function gatewayChecks(env: Record<string, string | undefined>): CheckResult[] {
   const checks: CheckResult[] = [];
 
+  // The gateway process loads its ambient identity BEFORE its config (gateway-index.ts) —
+  // it refuses to boot without DIONYSUS_BUSINESS_ID, so the doctor must fail it too
+  // (a gap the executed runbook acceptance discovered).
+  const businessId = env["DIONYSUS_BUSINESS_ID"];
+  checks.push(
+    check(
+      "gateway",
+      "DIONYSUS_BUSINESS_ID",
+      Boolean(businessId),
+      businessId ? "set" : "not set — the gateway refuses to boot without its ambient identity.",
+    ),
+  );
+
   const upstreamUrl = env["GATEWAY_UPSTREAM_URL"];
   checks.push(
     check(

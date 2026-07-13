@@ -10,6 +10,7 @@ const validConfigKey = Buffer.from("0123456789abcdef0123456789abcdef").toString(
 function greenEnv(): Record<string, string | undefined> {
   return {
     DATABASE_URL: "file:./.tmp/preflight-green.db",
+    DIONYSUS_BUSINESS_ID: "biz-preflight-green",
     GATEWAY_UPSTREAM_URL: "https://upstream.example.com/v1",
     GATEWAY_PORT: "8787",
     GATEWAY_UPSTREAM_KEY: "upstream-key-value",
@@ -91,6 +92,17 @@ describe("runPreflight (fail-closed doctor)", () => {
     expect(dbCheck!.detail).not.toContain("at probe");
     expect(dbCheck!.detail).not.toContain("secret-stack.ts");
     for (const c of report.checks) expect(c.detail).not.toContain("    at ");
+  });
+
+  it("2b. gateway without DIONYSUS_BUSINESS_ID → ok:false (the boot-order identity gap the runbook execution discovered)", async () => {
+    const env = { ...greenEnv() };
+    delete env.DIONYSUS_BUSINESS_ID;
+    const gateway = await runPreflight({ service: "gateway", env, dbProbe: okProbe });
+    expect(gateway.ok).toBe(false);
+    expect(gateway.checks.find((c) => c.name === "DIONYSUS_BUSINESS_ID")?.ok).toBe(false);
+    // Non-gateway services do not require the ambient identity.
+    const cockpit = await runPreflight({ service: "cockpit", env, dbProbe: okProbe });
+    expect(cockpit.ok).toBe(true);
   });
 
   it("5b. a probe error embedding a connection URL has its userinfo SCRUBBED (output gets pasted into reports)", async () => {

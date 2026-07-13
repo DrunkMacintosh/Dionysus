@@ -2,10 +2,11 @@
 
 Run the built Dionysus system for real on this machine: a fail-closed **preflight doctor**,
 idempotent **business provisioning**, a local **LLM gateway**, the **cockpit**, and the
-**nightly** on a schedule. Every command below was executed against a scratch database as this
-stage's acceptance (see [§10](#10-what-was-actually-executed-acceptance)); commands that need a
-real external account or a machine-level change are called out as **FOUNDER-ONLY** and were *not*
-run here.
+**nightly** on a schedule. The core loop was executed against a scratch database as this stage's
+acceptance — exactly the steps listed in [§10](#10-what-was-actually-executed-acceptance).
+Commands that need a real external account or a machine-level change are called out as
+**FOUNDER-ONLY** and were *not* run here; two commands are documented-but-unverified and say so
+inline (the cockpit server serving requests in §4, and the live discovery smoke in §8).
 
 Shell is **PowerShell** (Windows PowerShell 5.1 or PowerShell 7). Chain steps with `;`.
 Git Bash is broken on this box — do not use it.
@@ -81,7 +82,7 @@ Put them (and the rest of the environment) in a **dot-sourced** PowerShell file 
 Create `.env.dogfood.ps1` at the repo root:
 
 ```powershell
-# .env.dogfood.ps1  —  SECRETS. Never commit. Add it and logs/ to .gitignore first.
+# .env.dogfood.ps1  —  SECRETS. Never commit (already gitignored via .env.*.ps1).
 $env:DATABASE_URL         = "file:D:/Dionysus/data/dionysus.db"
 $env:DIONYSUS_BUSINESS_ID = "dogfood-co"                      # the gateway runs as this business
 $env:DIONYSUS_CONFIG_KEY  = "<paste-the-44-char-base64>"      # from the one-liner above
@@ -93,11 +94,10 @@ $env:GATEWAY_TOKEN        = "<a-shared-local-token>"          # gateway <-> nigh
 $env:GATEWAY_LOCAL_URL    = "http://127.0.0.1:8787/v1"        # where the nightly calls the gateway
 ```
 
-> `.gitignore` already ignores `*.db` and `.env`, but **not** `.env.dogfood.ps1` or `logs/`.
-> Add both before you create the secrets file:
-> ```powershell
-> Add-Content .gitignore "`n.env.dogfood.ps1`nlogs/"
-> ```
+> `.gitignore` already covers the secrets file and the runtime artifacts (`.env.*.ps1`, `data/`,
+> `logs/`, `*.db`) — verify with `git check-ignore .env.dogfood.ps1 data logs` before you create
+> them. **`.env.dogfood.ps1` is the ONLY place secrets live on disk**; every other script
+> dot-sources it and contains none.
 
 Dot-source it into any terminal that needs the env:
 
@@ -178,11 +178,11 @@ The form below was verified to append the full report and the exit marker:
 
 ```powershell
 # D:\Dionysus\scripts\run-nightly.ps1 — the scheduled nightly wrapper.
+# NO SECRETS LIVE HERE: the env (DATABASE_URL, DIONYSUS_CONFIG_KEY, GATEWAY_LOCAL_URL,
+# GATEWAY_TOKEN, ...) is dot-sourced from the gitignored .env.dogfood.ps1 — this wrapper
+# is safe to commit, and a `git add -A` can never pick up a credential from it.
 Set-Location "D:\Dionysus"
-$env:DATABASE_URL        = "file:D:/Dionysus/data/dionysus.db"
-$env:DIONYSUS_CONFIG_KEY = "<your-config-key>"         # without it, metric ingestion is skipped (honestly)
-$env:GATEWAY_LOCAL_URL   = "http://127.0.0.1:8787/v1"  # the local gateway the sweep calls
-$env:GATEWAY_TOKEN       = "<your-gateway-token>"       # must match the gateway's GATEWAY_TOKEN
+. .\.env.dogfood.ps1
 $logDir = "D:\Dionysus\logs"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $log = Join-Path $logDir ("nightly-{0:yyyy-MM-dd}.log" -f (Get-Date))
