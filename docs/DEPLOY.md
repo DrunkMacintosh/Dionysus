@@ -234,19 +234,24 @@ Exit code is **0 iff there are no FAILs** (warnings do not fail the exit).
 
 ---
 
-## 8. Bootstrapping objectives & routes (operator path)
+## 8. Bootstrapping objectives & routes
 
-A freshly-provisioned business has no objective yet, so the nightly's radar/learn/strategy/drafts
-sections honestly **skip** ("no objective to sense against", etc.). The current operator path to
-seed an objective + route and exercise the discover/propose pipelines is the department live-smoke
-script:
+**The objective is founder-facing (6f):** log in and state it on the cockpit's `/setup` page.
+The next nightly then bootstraps the FIRST route from the best discovered case — the `plan`
+section runs first, so the same night's later sections draft waypoint 1 and the first morning
+briefing arrives complete (plan on `/route`, drafts on `/drafts`, everything still `proposed`).
+
+**Discovery remains the operator path** — the nightly needs discovered Cases to plan from, and
+until discovery has run its `plan` section honestly skips with "no discovered cases — run
+discovery first":
 
 ```powershell
 . .\.env.dogfood.ps1
 pnpm -F department smoke        # node scripts/live-smoke.mjs — needs a working gateway upstream
 ```
 
-A founder-facing onboarding flow (objective/route creation from the cockpit) is future work.
+(A cockpit discovery button and founder case-picking are future work; the nightly takes the
+top-ranked case.)
 
 ---
 
