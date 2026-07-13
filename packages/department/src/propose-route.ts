@@ -29,7 +29,7 @@ import { loadPrompt } from "./prompts.js";
 import { fence } from "./tools/fetch-page.js";
 import { parseRouteProposal } from "./plan-schemas.js";
 
-export type ProposeRouteInput = { objective: ObjectiveInput; caseId: string };
+export type ProposeRouteInput = { objective: ObjectiveInput; caseId: string; existingObjectiveId?: string };
 export type ProposeRouteDeps = { harness: Harness; models: { brain: string } };
 export type RoutePlan = {
   objectiveId: string;
@@ -60,12 +60,18 @@ export async function proposeRoute(identity: Identity, input: ProposeRouteInput,
   const proposal = await parseRouteProposal(raw.finalOutput,
     async (err) => (await deps.harness.runAgent(def, err)).finalOutput);
 
-  // Objective-first, but only once the model output has parsed: creating it here
-  // (instead of before the model call) means a parse/model failure never persists
-  // a routeless orphan objective. objectiveId is used only below, so this is a
-  // zero-functional-cost move — the strategist prompt above uses input.objective
-  // fields directly, never objectiveId. (D31/D8/D12)
-  const { objectiveId } = await createObjective(identity, input.objective);
+  // Objective: reuse the founder's cockpit-created row when given (validated in scope —
+  // no duplicate objective); otherwise create it now, post-parse as before (a model/parse
+  // failure still never persists a routeless orphan objective).
+  let objectiveId: string;
+  if (input.existingObjectiveId) {
+    const existing = await prisma.objective.findFirst({
+      where: { id: input.existingObjectiveId, businessId: identity.businessId } });
+    if (!existing) throw new Error(`Objective ${input.existingObjectiveId} not found in this business scope.`);
+    objectiveId = existing.id;
+  } else {
+    ({ objectiveId } = await createObjective(identity, input.objective));
+  }
   const { routeId } = await persistRoute(identity, { objectiveId, source: "case", caseRef: input.caseId });
 
   const waypoints: RoutePlan["waypoints"] = [];

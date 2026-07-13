@@ -83,4 +83,44 @@ describe("proposeRoute", () => {
     const objs = await prisma.objective.findMany({ where: { businessId: "biz_route_orphan" } });
     expect(objs).toHaveLength(0); // no orphan
   });
+
+  it("reuses an existing objective when given existingObjectiveId (no duplicate)", async () => {
+    const biz = "biz_route_reuse";
+    await prisma.routeAction.deleteMany({ where: { businessId: biz } });
+    await prisma.routeWaypoint.deleteMany({ where: { businessId: biz } });
+    await prisma.route.deleteMany({ where: { businessId: biz } });
+    await prisma.objective.deleteMany({ where: { businessId: biz } });
+    await prisma.business.upsert({ where: { id: biz },
+      create: { id: biz, name: "Reuse Co", maxTokensPerDay: 100000 }, update: { maxTokensPerDay: 100000 } });
+    const rc = await persistCase({ businessId: biz }, { name: "C", platform: "hn", mode: "m", rank: 1, historicalArc: [], modernizedPlan: {}, insight: "i", sources: [], confidence: 0.5 });
+    // The founder's cockpit-created objective row (the one /setup writes):
+    const seeded = await prisma.objective.create({ data: { businessId: biz, kind: "signups", target: "100", metric: "users", status: "active" } });
+
+    const plan = await proposeRoute({ businessId: biz },
+      { objective: { kind: "signups", target: "100", metric: "users" }, caseId: rc.caseId, existingObjectiveId: seeded.id },
+      { harness: fakeHarness(), models: { brain: "fake" } });
+
+    expect(plan.objectiveId).toBe(seeded.id);                            // reused, not recreated
+    const route = await prisma.route.findUnique({ where: { id: plan.routeId } });
+    expect(route?.objectiveId).toBe(seeded.id);                          // the route hangs off the reused objective
+    expect(await prisma.objective.count({ where: { businessId: biz } })).toBe(1); // no duplicate
+  });
+
+  it("rejects a cross-tenant existingObjectiveId and persists no route", async () => {
+    const caller = "biz_route_xt";
+    const other = "biz_route_other";
+    await prisma.routeAction.deleteMany({ where: { businessId: caller } });
+    await prisma.routeWaypoint.deleteMany({ where: { businessId: caller } });
+    await prisma.route.deleteMany({ where: { businessId: caller } });
+    await prisma.objective.deleteMany({ where: { businessId: { in: [caller, other] } } });
+    await prisma.business.upsert({ where: { id: caller }, create: { id: caller, name: "XT Co", maxTokensPerDay: 100000 }, update: { maxTokensPerDay: 100000 } });
+    await prisma.business.upsert({ where: { id: other }, create: { id: other, name: "Other Co", maxTokensPerDay: 100000 }, update: { maxTokensPerDay: 100000 } });
+    const xtCase = await persistCase({ businessId: caller }, { name: "C", platform: "hn", mode: "m", rank: 1, historicalArc: [], modernizedPlan: {}, insight: "i", sources: [], confidence: 0.5 });
+    const foreignObj = await prisma.objective.create({ data: { businessId: other, kind: "signups", target: "100", metric: "users", status: "active" } });
+
+    await expect(proposeRoute({ businessId: caller },
+      { objective: { kind: "signups", target: "100", metric: "users" }, caseId: xtCase.caseId, existingObjectiveId: foreignObj.id },
+      { harness: fakeHarness(), models: { brain: "fake" } })).rejects.toThrow(/not found/i);
+    expect(await prisma.route.count({ where: { businessId: caller } })).toBe(0); // fail-closed: no route persisted
+  });
 });
