@@ -5,7 +5,7 @@
 // destroys child rows. Prints nothing (the thin CLI is the operator output surface).
 import { prisma } from "../db.js";
 
-export type ProvisionInput = { id: string; name: string; ownerEmail: string; url?: string; maxTokensPerDay?: number };
+export type ProvisionInput = { id: string; name: string; ownerEmail: string; maxTokensPerDay?: number };
 export type ProvisionResult = { businessId: string; created: boolean; name: string; ownerEmail: string; maxTokensPerDay: number };
 
 // id: lowercase slug; ownerEmail: a deliberately simple shape check (presence, not deliverability).
@@ -36,10 +36,8 @@ function validate(input: ProvisionInput): void {
  * Idempotently provision a Business. Validates first (invalid → throws, nothing written),
  * then upserts by id: `created` reflects whether the row was new (a findUnique-before on
  * this sequential operator path). The update touches only name/ownerEmail/maxTokensPerDay —
- * child rows (objectives, routes, …) are never destroyed.
- *
- * Note: `url` is accepted for interface stability but the current Business schema has no
- * url column and this stage adds no schema change, so it is not persisted.
+ * child rows (objectives, routes, …) are never destroyed. (No url field: Business has no
+ * such column — the product URL lives with the Product/brand extraction, not here.)
  */
 export async function provisionBusiness(input: ProvisionInput): Promise<ProvisionResult> {
   validate(input);

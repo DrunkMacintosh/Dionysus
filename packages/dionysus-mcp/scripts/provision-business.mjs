@@ -1,19 +1,18 @@
 // Business provisioning CLI — a thin operator wrapper over the validated idempotent core.
-//   node scripts/provision-business.mjs <id> <name> <ownerEmail> [url] [maxTokensPerDay]
+//   node scripts/provision-business.mjs <id> <name> <ownerEmail> [maxTokensPerDay]
 // Prints a one-line summary + a NEXT-STEPS hint (issue a login link via cockpit). Operator
 // output, so it prints (the sweep/issue-login-link convention). Exits 1 with the validation
 // message on bad input. No secrets are printed (there are none in a provision).
 import { provisionBusiness } from "../dist/tools/provision.js";
 
-const [id, name, ownerEmail, url, rawCap] = process.argv.slice(2);
+const [id, name, ownerEmail, rawCap] = process.argv.slice(2);
 if (!id || !name || !ownerEmail) {
-  console.error("usage: node scripts/provision-business.mjs <id> <name> <ownerEmail> [url] [maxTokensPerDay]");
+  console.error("usage: node scripts/provision-business.mjs <id> <name> <ownerEmail> [maxTokensPerDay]");
   process.exit(1);
 }
 
 try {
   const input = { id, name, ownerEmail };
-  if (url) input.url = url;
   if (rawCap !== undefined) input.maxTokensPerDay = Number(rawCap);
 
   const res = await provisionBusiness(input);
