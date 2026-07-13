@@ -14,7 +14,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "start:gateway": "node dist/gateway-index.js",
-    "preflight": "node scripts/preflight.mjs"
+    "preflight": "node scripts/preflight.mjs",
+    "provision": "node scripts/provision-business.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
