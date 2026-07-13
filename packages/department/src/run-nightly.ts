@@ -1,5 +1,7 @@
-// Stage 6a/6b/6c/6e — the NIGHTLY WAKE (the D30 platform-trigger slice). One unattended routine
-// per business, SIX best-effort + independent sections in order: radar sensing (4e) →
+// Stage 6a/6b/6c/6e/6f — the NIGHTLY WAKE (the D30 platform-trigger slice). One unattended routine
+// per business, SEVEN best-effort + independent sections in order: PLAN (6f: the bootstrap — a
+// founder-stated objective with no route yet gets its FIRST route proposed from the best
+// discovered case, so it runs BEFORE the rest can see the new route) → radar sensing (4e) →
 // metric ingestion (5d) → LEARN (6b: refresh craft+performance beliefs, then recommend the
 // next action — deterministic, never-auto) → STRATEGY (6c: propose a founder-gated route
 // revision when the plan measurably stalls) → CRO (6e: on the measured-flat signal, the page
@@ -26,6 +28,7 @@ import type { HnTransport } from "./tools/hn-source.js";
 import { runRadar } from "./run-radar.js";
 import { runCro } from "./run-cro.js";
 import { draftWaypoint } from "./draft-waypoint.js";
+import { proposeRoute } from "./propose-route.js";
 
 export type NightlyDeps = {
   harness: Harness;
@@ -38,18 +41,48 @@ export type SectionResult =
   | { status: "ok"; detail: string }
   | { status: "skipped"; reason: string }
   | { status: "failed"; reason: string };
-export type NightlyBusinessResult = { businessId: string; radar: SectionResult; metrics: SectionResult; learn: SectionResult; strategy: SectionResult; cro: SectionResult; drafts: SectionResult };
+export type NightlyBusinessResult = { businessId: string; plan: SectionResult; radar: SectionResult; metrics: SectionResult; learn: SectionResult; strategy: SectionResult; cro: SectionResult; drafts: SectionResult };
 
 function failureReason(error: unknown): string {
   return error instanceof Error ? error.message : "unknown error";
 }
 
-/** One business's night: radar → metrics → learn → strategy → cro → drafts, each best-effort — never throws to the caller. */
+/** One business's night: plan → radar → metrics → learn → strategy → cro → drafts, each best-effort — never throws to the caller. */
 export async function runNightly(identity: Identity, deps: NightlyDeps): Promise<NightlyBusinessResult> {
   const businessId = identity.businessId;
   // ONE clock for the whole night — the learn section's boundary time, matching draftWaypoint's
   // own injected `new Date()` so belief recency is measured against a single, consistent instant.
   const now = new Date();
+
+  // PLAN — the bootstrap: a founder-stated objective with NO route yet gets its FIRST route
+  // proposed from the best discovered case (proposed, never-auto — the same night's later
+  // sections draft waypoint 1, so the morning briefing arrives complete). Runs ONCE: any
+  // existing route suppresses (re-planning is the Growth Analyst's job, 6c). Runs FIRST so the
+  // same night's radar/learn/strategy/cro/drafts all see the new route.
+  let plan: SectionResult;
+  try {
+    const objective = await prisma.objective.findFirst({
+      where: { businessId, status: "active" }, orderBy: { createdAt: "desc" } });
+    const existingRoute = await prisma.route.findFirst({ where: { businessId } });
+    if (!objective) {
+      plan = { status: "skipped", reason: "no objective yet — set one on /setup" };
+    } else if (existingRoute) {
+      plan = { status: "skipped", reason: "a route already exists (re-planning is the Growth Analyst's job)" };
+    } else {
+      const topCase = await prisma.case.findFirst({ where: { businessId }, orderBy: { rank: "asc" } });
+      if (!topCase) {
+        plan = { status: "skipped", reason: "no discovered cases — run discovery first" };
+      } else {
+        const routePlan = await proposeRoute(identity,
+          { objective: { kind: objective.kind, target: objective.target, metric: objective.metric },
+            caseId: topCase.id, existingObjectiveId: objective.id },
+          { harness: deps.harness, models: deps.models });
+        plan = { status: "ok", detail: `route proposed from case "${topCase.name}" — ${routePlan.waypoints.length} waypoint(s)` };
+      }
+    }
+  } catch (error: unknown) {
+    plan = { status: "failed", reason: failureReason(error) }; // incl. budget fail-closed throw
+  }
 
   // RADAR — needs the business (its name is the sensing query) and an objective (the lens).
   // Proposals land on the LATEST route's active waypoint (runRadar's scoped lookup).
@@ -158,7 +191,7 @@ export async function runNightly(identity: Identity, deps: NightlyDeps): Promise
     drafts = { status: "failed", reason: failureReason(error) }; // incl. budget fail-closed
   }
 
-  return { businessId, radar, metrics, learn, strategy, cro, drafts };
+  return { businessId, plan, radar, metrics, learn, strategy, cro, drafts };
 }
 
 /** The platform sweep: every business, each under its own identity, failures isolated. */
@@ -171,6 +204,7 @@ export async function runNightlySweep(deps: NightlyDeps): Promise<NightlyBusines
     } catch (error: unknown) {
       // runNightly is itself best-effort; this is the belt-and-suspenders isolation layer.
       results.push({ businessId: b.id,
+        plan: { status: "failed", reason: failureReason(error) },
         radar: { status: "failed", reason: failureReason(error) },
         metrics: { status: "failed", reason: failureReason(error) },
         learn: { status: "failed", reason: failureReason(error) },

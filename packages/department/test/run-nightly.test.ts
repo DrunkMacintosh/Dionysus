@@ -110,6 +110,101 @@ describe("runNightly", () => {
   });
 });
 
+// ── Stage 6f: the nightly PLAN section (bootstrap the first route) ────────────
+const BOOT = { businessId: "biz_nightly_boot" };
+const STANDING = { businessId: "biz_nightly_standing" };
+const NOCASE = { businessId: "biz_nightly_nocase" };
+
+async function resetPlanBiz(businessId: string, name: string) {
+  await prisma.routeAction.deleteMany({ where: { businessId } });
+  await prisma.routeWaypoint.deleteMany({ where: { businessId } });
+  await prisma.route.deleteMany({ where: { businessId } });
+  await prisma.case.deleteMany({ where: { businessId } });
+  await prisma.objective.deleteMany({ where: { businessId } });
+  await prisma.business.upsert({ where: { id: businessId },
+    create: { id: businessId, name, maxTokensPerDay: 100000 }, update: { maxTokensPerDay: 100000, name } });
+}
+
+// Seed a discovered Case via raw prisma with exactly the columns proposeRoute reads
+// (name/platform/mode/historicalArcJson/modernizedPlanJson/insight) plus rank (the
+// nightly orders by it — the historian ranks 1 = most relevant, so rank asc = best
+// first) and the two required-but-unread columns the schema demands (sourcesJson/confidence).
+async function seedCase(businessId: string, rank: number, name: string) {
+  return prisma.case.create({ data: {
+    businessId, name, platform: "hackernews", mode: "launch-led", rank,
+    historicalArcJson: JSON.stringify([{ when: "2020", beat: "Show HN" }]),
+    modernizedPlanJson: JSON.stringify({ steps: ["Show HN"] }),
+    insight: "Authenticity wins", sourcesJson: JSON.stringify([]), confidence: 0.7 } });
+}
+
+// A harness that ALSO answers the route-strategist call (its context contains
+// "Chosen case:") with a schema-valid RouteProposal, keeps the radar/draft branches,
+// and records every input so a test can prove a call did (or did NOT) happen.
+function bootstrapHarness(): { harness: Harness; inputs: string[] } {
+  const inputs: string[] = [];
+  const harness: Harness = {
+    async runAgent(_def: AgentDef, input: string) {
+      inputs.push(input);
+      if (input.includes("Chosen case:")) {
+        return { finalOutput: JSON.stringify({ waypoints: [
+          { title: "Launch on HN", goal: "First signups toward the goal",
+            actions: [{ employeeRole: "copywriter", type: "post", rationale: "authentic Show HN post", features: { channel: "hackernews" } }] },
+        ] }) };
+      }
+      if (input.includes("Action: draft")) {
+        return { finalOutput: JSON.stringify({ channel: "hackernews", kind: "post", content: { title: "T", body: "b" } }) };
+      }
+      return { finalOutput: JSON.stringify({ observations: [{ title: "Devtool wave", body: "b", sourceUrl: SIGNAL_URL, relevance: 8, confidence: 0.6 }] }) };
+    },
+    async completeOnce() { return "unused"; },
+  };
+  return { harness, inputs };
+}
+
+describe("runNightly — plan section (stage 6f bootstrap)", () => {
+  it("BOOTSTRAP: objective + a discovered Case + NO route → proposes the first route from the BEST case (never-auto), no duplicate objective", async () => {
+    await resetPlanBiz(BOOT.businessId, "Boot Co");
+    const objective = await prisma.objective.create({ data: { businessId: BOOT.businessId, kind: "growth", target: "100 signups", metric: "signups", status: "active" } });
+    // Two cases: the nightly must pick the BEST (rank 1), not merely the first inserted.
+    await seedCase(BOOT.businessId, 2, "Runner-up");
+    const best = await seedCase(BOOT.businessId, 1, "Best Case");
+
+    const { harness } = bootstrapHarness();
+    const res = await runNightly(BOOT, { harness, models: { brain: "fake" }, hnTransport });
+
+    expect(res.plan.status).toBe("ok");
+    // A route now exists, grounded in the rank-1 case, with a waypoint + proposed actions.
+    const routes = await prisma.route.findMany({ where: { businessId: BOOT.businessId } });
+    expect(routes).toHaveLength(1);
+    expect(routes[0]!.caseRef).toBe(best.id);                    // the BEST case (rank asc), not the runner-up
+    expect(routes[0]!.objectiveId).toBe(objective.id);           // hangs off the founder-stated objective
+    expect(await prisma.routeWaypoint.count({ where: { businessId: BOOT.businessId } })).toBeGreaterThanOrEqual(1);
+    const actions = await prisma.routeAction.findMany({ where: { businessId: BOOT.businessId } });
+    expect(actions.length).toBeGreaterThanOrEqual(1);
+    expect(actions.every((a) => a.status === "proposed")).toBe(true); // never-auto
+    // No duplicate objective — the nightly reused the founder-stated row.
+    expect(await prisma.objective.count({ where: { businessId: BOOT.businessId } })).toBe(1);
+  });
+
+  it("ONE-STANDING: a business that already has a route → plan skips (the bootstrap fires once; re-planning is the Growth Analyst's job)", async () => {
+    await seedBusiness(STANDING.businessId, "Standing Co"); // objective + route + waypoint
+    const { harness, inputs } = bootstrapHarness();
+    const res = await runNightly(STANDING, { harness, models: { brain: "fake" }, hnTransport });
+    expect(res.plan).toMatchObject({ status: "skipped", reason: expect.stringContaining("already exists") });
+    expect(inputs.some((i) => i.includes("Chosen case:"))).toBe(false); // short-circuited before the model
+  });
+
+  it("NO-CASES: objective + no route + no discovered cases → plan skips honestly with ZERO route-strategist calls, zero routes", async () => {
+    await resetPlanBiz(NOCASE.businessId, "No Case Co");
+    await prisma.objective.create({ data: { businessId: NOCASE.businessId, kind: "growth", target: "100 signups", metric: "signups", status: "active" } });
+    const { harness, inputs } = bootstrapHarness();
+    const res = await runNightly(NOCASE, { harness, models: { brain: "fake" }, hnTransport });
+    expect(res.plan).toMatchObject({ status: "skipped", reason: expect.stringContaining("no discovered cases") });
+    expect(await prisma.route.count({ where: { businessId: NOCASE.businessId } })).toBe(0);
+    expect(inputs.some((i) => i.includes("Chosen case:"))).toBe(false); // the honest skip made no model call
+  });
+});
+
 describe("runNightlySweep", () => {
   beforeEach(async () => { await seedBusiness(A.businessId, "Alpha Co"); await seedBusiness(B.businessId, "Beta Co"); });
 
