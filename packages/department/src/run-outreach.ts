@@ -42,7 +42,7 @@ import type { SafeFetchOptions } from "dionysus-mcp/lib/ssrf";
 import type { Harness } from "./llm/types.js";
 import { loadPrompt } from "./prompts.js";
 import { fence } from "./tools/fetch-page.js";
-import { parsePitch } from "./pitch-schemas.js";
+import { parsePitch, type PitchOutput } from "./pitch-schemas.js";
 
 // The cap is per business per night: draft the oldest MAX; the remainder retries next
 // night (reported, never silent). Keeps a burst of founder requests from a budget spike.
@@ -134,10 +134,22 @@ export async function runOutreach(identity: Identity, deps: OutreachDeps): Promi
       fence("target-page", result.text),
     ].join("\n");
 
-    // 4d. Draft with one harness retry; a malformed output (after the retry) throws — nothing
-    //     partial is persisted (fail-closed persistence, the run-cro discipline).
-    const raw = await deps.harness.runAgent(def, ctx);
-    const pitch = await parsePitch(raw.finalOutput, async (err) => (await deps.harness.runAgent(def, err)).finalOutput);
+    // 4d. Draft with one harness retry. A malformed output (after the retry) throws — ISOLATE
+    //     it per request: one poison pitch must never abort the batch (head-of-line blocking).
+    //     Because the cap re-selects the OLDEST first every night, a persistently-poison oldest
+    //     request would otherwise starve its siblings indefinitely. Skip + log + continue; the
+    //     request stays undrafted (assetId null, status proposed) → it retries next night, and
+    //     nothing partial is persisted (the throw is before any write). (Budget throws stay
+    //     fail-closed — they happen before the loop, untouched.)
+    let pitch: PitchOutput;
+    try {
+      const raw = await deps.harness.runAgent(def, ctx);
+      pitch = await parsePitch(raw.finalOutput, async (err) => (await deps.harness.runAgent(def, err)).finalOutput);
+    } catch {
+      skipped++;
+      console.error(`outreach: skipped request ${request.id} — model output unparseable after retry (retries next night).`);
+      continue;
+    }
 
     // 4e. GROUNDING (the honesty core): the personalizationEvidence must be a NON-EMPTY
     //     verbatim (normalized) substring of the freshly-fetched page. An empty/whitespace

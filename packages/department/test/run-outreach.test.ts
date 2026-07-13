@@ -51,6 +51,27 @@ const FAB_PITCH = JSON.stringify({
   personalizationEvidence: FAB_EVIDENCE,
 });
 
+// MALFORMED: no JSON object at all → parsePitch fails BOTH the initial attempt and its one
+// retry (the harness echoes the same unparseable text), so parsePitch throws.
+const MALFORMED_OUTPUT = "The model rambled on and never produced a JSON object at all.";
+
+// A harness that returns VALID output ONLY when the input mentions `validForName`, else
+// MALFORMED. The loop is oldest-first, so the older request's ctx (a different name) AND
+// its parse-retry (the error-summary string, which also omits the name) both get MALFORMED
+// and parsePitch throws for it — deterministically — before the newer request is reached.
+function keyedHarness(validForName: string, valid: string, malformed: string): CountingHarness {
+  const h = {
+    calls: 0,
+    async runAgent(_def: AgentDef, input: string) {
+      h.calls++;
+      capturedInput = input;
+      return { finalOutput: input.includes(validForName) ? valid : malformed };
+    },
+    async completeOnce() { return "unused"; },
+  };
+  return h;
+}
+
 const actionCount = (biz: string) => prisma.routeAction.count({ where: { businessId: biz } });
 const assetCount = (biz: string) => prisma.asset.count({ where: { businessId: biz } });
 
@@ -246,5 +267,40 @@ describe("runOutreach (founder-targeted -> page-grounded -> draft-only pitches)"
     const action = await prisma.routeAction.findUnique({ where: { id: requestId } });
     expect(action!.assetId).toBeNull();
     expect(await assetCount(BIZ)).toBe(0);
+  });
+
+  it("MODEL-PARSE ISOLATION: an unparseable OLDER pitch is skipped, never aborting the batch; the NEWER request still drafts", async () => {
+    const BIZ = "biz_outreach_parse_iso";
+    const wpId = await seedTenant(BIZ);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    // Two pending requests, both with readable pages (same server). createdAt is explicit so
+    // the OLDER (poison) is processed first, oldest-first — head-of-line if the throw escapes.
+    const t0 = new Date("2026-07-11T00:00:00Z").getTime();
+    const olderId = await addRequest(BIZ, wpId, { targetName: "Older Newsletter", createdAt: new Date(t0) });
+    const newerId = await addRequest(BIZ, wpId, { targetName: "Newer Newsletter", createdAt: new Date(t0 + 60000) });
+    // MALFORMED for the OLDER (its ctx + retry omit "Newer Newsletter"); a grounded pitch for the NEWER.
+    const harness = keyedHarness("Newer Newsletter", GROUNDED_PITCH, MALFORMED_OUTPUT);
+    const res = await runOutreach({ businessId: BIZ }, deps(harness));
+
+    // The night did NOT throw: one poison request cannot sink the batch (no head-of-line blocking).
+    expect(res.status).toBe("ok");
+    if (res.status !== "ok") return;
+    // The NEWER request drafted despite the OLDER one's unparseable output.
+    expect(res.drafted).toEqual([newerId]);
+    // The OLDER parse failure is counted in the skip accounting (a non-drafted, non-grounding degrade).
+    expect(res.skipped).toBe(1);
+    expect(res.dropped).toBe(0);
+    expect(console.error).toHaveBeenCalled(); // the skip is logged, never silent
+
+    // NEWER: drafted → assetId set, still a proposed outreach-pitch; the asset was persisted.
+    const newer = await prisma.routeAction.findUnique({ where: { id: newerId } });
+    expect(newer!.assetId).toBeTruthy();
+    expect(newer!.status).toBe("proposed");
+    // OLDER: undrafted → assetId null, still proposed → it retries next night.
+    const older = await prisma.routeAction.findUnique({ where: { id: olderId } });
+    expect(older!.assetId).toBeNull();
+    expect(older!.status).toBe("proposed");
+    // Exactly one asset was written (the newer's); the poison request wrote nothing partial.
+    expect(await assetCount(BIZ)).toBe(1);
   });
 });
