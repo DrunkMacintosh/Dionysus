@@ -1,13 +1,17 @@
-// Stage 6a/6b/6c — the NIGHTLY WAKE (the D30 platform-trigger slice). One unattended routine
-// per business, FIVE best-effort + independent sections in order: radar sensing (4e) →
+// Stage 6a/6b/6c/6e — the NIGHTLY WAKE (the D30 platform-trigger slice). One unattended routine
+// per business, SIX best-effort + independent sections in order: radar sensing (4e) →
 // metric ingestion (5d) → LEARN (6b: refresh craft+performance beliefs, then recommend the
 // next action — deterministic, never-auto) → STRATEGY (6c: propose a founder-gated route
-// revision when the plan measurably stalls) → DRAFTS (6b: draft the undrafted proposals so the
-// founder wakes to a reviewable morning briefing). All under the business's OWN ambient
-// identity (D27.1). The sweep is the platform operator: it iterates businesses but never mixes
-// tenants, and one business's failure NEVER blocks the next (per-business isolation,
-// summary-reported). Budget stays fail-closed INSIDE runRadar/draftWaypoint (they throw before
-// any model call when the gate refuses) — the nightly reports that as `failed` and moves on.
+// revision when the plan measurably stalls) → CRO (6e: on the measured-flat signal, the page
+// may be the leak — the Conversion Optimizer audits the founder's OWN landing page for fixes) →
+// DRAFTS (6b: draft the undrafted proposals so the founder wakes to a reviewable morning
+// briefing). CRO runs BEFORE drafts on purpose: it persists COMPLETE (asset-bound) proposals,
+// so the drafts section's assetless-only filter never re-drafts a CRO finding. All under the
+// business's OWN ambient identity (D27.1). The sweep is the platform operator: it iterates
+// businesses but never mixes tenants, and one business's failure NEVER blocks the next
+// (per-business isolation, summary-reported). Budget stays fail-closed INSIDE
+// runRadar/draftWaypoint/runCro (they throw before any model call when the gate refuses) — the
+// nightly reports that as `failed` and moves on.
 import type { Identity } from "dionysus-mcp/identity";
 import { prisma } from "dionysus-mcp/db";
 import { ingestMetrics, metricTransportFromSafeFetch, type MetricTransport } from "dionysus-mcp/tools/analytics";
@@ -15,9 +19,12 @@ import { deriveCraftBeliefs } from "dionysus-mcp/tools/belief-graph";
 import { derivePerformanceBeliefs } from "dionysus-mcp/tools/performance-belief";
 import { recommendNextAction } from "dionysus-mcp/tools/recommend";
 import { analyzeRouteForRevision } from "dionysus-mcp/tools/growth-analyst";
+import { buildCmoReport } from "dionysus-mcp/tools/cmo-report";
+import type { SafeFetchOptions } from "dionysus-mcp/lib/ssrf";
 import type { Harness } from "./llm/types.js";
 import type { HnTransport } from "./tools/hn-source.js";
 import { runRadar } from "./run-radar.js";
+import { runCro } from "./run-cro.js";
 import { draftWaypoint } from "./draft-waypoint.js";
 
 export type NightlyDeps = {
@@ -25,18 +32,19 @@ export type NightlyDeps = {
   models: { brain: string };
   hnTransport?: HnTransport;         // test seam; production uses the real HN fetch
   metricTransport?: MetricTransport; // test seam; production defaults to the SSRF-guarded adapter
+  croFetchOpts?: SafeFetchOptions;   // test seam; production uses the real SSRF-guarded page fetch
 };
 export type SectionResult =
   | { status: "ok"; detail: string }
   | { status: "skipped"; reason: string }
   | { status: "failed"; reason: string };
-export type NightlyBusinessResult = { businessId: string; radar: SectionResult; metrics: SectionResult; learn: SectionResult; strategy: SectionResult; drafts: SectionResult };
+export type NightlyBusinessResult = { businessId: string; radar: SectionResult; metrics: SectionResult; learn: SectionResult; strategy: SectionResult; cro: SectionResult; drafts: SectionResult };
 
 function failureReason(error: unknown): string {
   return error instanceof Error ? error.message : "unknown error";
 }
 
-/** One business's night: radar → metrics → learn → strategy → drafts, each best-effort — never throws to the caller. */
+/** One business's night: radar → metrics → learn → strategy → cro → drafts, each best-effort — never throws to the caller. */
 export async function runNightly(identity: Identity, deps: NightlyDeps): Promise<NightlyBusinessResult> {
   const businessId = identity.businessId;
   // ONE clock for the whole night — the learn section's boundary time, matching draftWaypoint's
@@ -109,6 +117,26 @@ export async function runNightly(identity: Identity, deps: NightlyDeps): Promise
     strategy = { status: "failed", reason: failureReason(error) };
   }
 
+  // CRO — the page may be the leak, not the posts. Runs ONLY on the traffic-without-conversion
+  // signal (verdict measured-flat), with one-standing + product-URL gating inside runCro itself
+  // plus the verdict gate here. Deterministic trigger; the model call is budget-gated in runCro.
+  // Runs AFTER strategy and BEFORE drafts: runCro persists COMPLETE (asset-bound) cro-fix
+  // proposals, so the drafts section's assetless-only filter never re-drafts them.
+  let cro: SectionResult;
+  try {
+    const report = await buildCmoReport(identity, now); // reuses the single night clock
+    if (report.verdict.state !== "measured-flat") {
+      cro = { status: "skipped", reason: "no traffic-without-conversion signal" };
+    } else {
+      const res = await runCro(identity, { harness: deps.harness, models: deps.models, ...(deps.croFetchOpts ? { fetchOpts: deps.croFetchOpts } : {}) });
+      cro = res.status === "ok"
+        ? { status: "ok", detail: `${res.actionIds.length} finding(s) queued, ${res.dropped} dropped` }
+        : { status: "skipped", reason: res.reason };
+    }
+  } catch (error: unknown) {
+    cro = { status: "failed", reason: failureReason(error) }; // incl. the budget fail-closed throw
+  }
+
   // DRAFTS — the morning briefing: draft any undrafted proposals on the active waypoint so the
   // founder wakes to REVIEWABLE drafts (never-auto: they are still `proposed`). draftWaypoint is
   // budget-fail-closed FIRST and skips bound proposals (founder edits are sacred). Runs LAST so the
@@ -130,7 +158,7 @@ export async function runNightly(identity: Identity, deps: NightlyDeps): Promise
     drafts = { status: "failed", reason: failureReason(error) }; // incl. budget fail-closed
   }
 
-  return { businessId, radar, metrics, learn, strategy, drafts };
+  return { businessId, radar, metrics, learn, strategy, cro, drafts };
 }
 
 /** The platform sweep: every business, each under its own identity, failures isolated. */
@@ -147,6 +175,7 @@ export async function runNightlySweep(deps: NightlyDeps): Promise<NightlyBusines
         metrics: { status: "failed", reason: failureReason(error) },
         learn: { status: "failed", reason: failureReason(error) },
         strategy: { status: "failed", reason: failureReason(error) },
+        cro: { status: "failed", reason: failureReason(error) },
         drafts: { status: "failed", reason: failureReason(error) } });
     }
   }

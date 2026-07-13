@@ -94,6 +94,10 @@ export async function listSendQueue(identity: Identity): Promise<SendCard[]> {
   for (const action of actions) {
     const asset = await prisma.asset.findFirst({ where: { id: action.assetId!, businessId: identity.businessId } });
     if (!asset) continue; // dangling pointer: nothing to copy, not sendable
+    // A cro-fix (Stage 6e) is a landing-page fix the FOUNDER applies to their OWN site by hand —
+    // an apply-checklist item, NOT a copy-paste public send. It never enters the send queue.
+    // (It still reaches /drafts via listProposedDrafts, which stays inclusive.)
+    if (asset.kind === "cro-fix") continue;
     const wp = await prisma.routeWaypoint.findFirst({ where: { id: action.waypointId, businessId: identity.businessId } });
     let title: string | null = null;
     let body: string | null = null;

@@ -99,6 +99,15 @@ describe("runNightly", () => {
     expect(res.strategy).toBeDefined();
     expect(res.strategy.status).toBe("skipped");
   });
+
+  it("the cro section skips on a young/healthy plan — it runs only on the measured-flat traffic-without-conversion signal", async () => {
+    // The standard fixture (Alpha Co) has no connected source / snapshots, so the CMO verdict is
+    // unmeasured (never measured-flat) → the cro section skips WITHOUT a page fetch or model call.
+    // (The measured-flat trigger path — the page may be the leak — is the T4 eval gate's job.)
+    const res = await runNightly(A, { harness: goodHarness(), models: { brain: "fake" }, hnTransport });
+    expect(res.cro).toBeDefined();
+    expect(res.cro).toMatchObject({ status: "skipped", reason: "no traffic-without-conversion signal" });
+  });
 });
 
 describe("runNightlySweep", () => {

@@ -264,6 +264,65 @@ describe("cmo report service (getCmoReport)", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// CRO send-queue exclusion (Stage 6e, Task 3) — a cro-fix asset is an
+// apply-checklist item (the founder edits their OWN landing page by hand), NOT a
+// copy-paste public send. listSendQueue EXCLUDES kind:"cro-fix"; listProposedDrafts
+// stays INCLUSIVE so the finding still reaches /drafts for founder review.
+// ---------------------------------------------------------------------------
+const CRO = { businessId: "biz_cockpit_cro" };
+
+describe("cro-fix send-queue exclusion / drafts inclusion", () => {
+  let approvedPostId = "";
+  let approvedCroId = "";
+  let proposedCroId = "";
+
+  beforeAll(async () => {
+    await prisma.asset.deleteMany({ where: { businessId: CRO.businessId } });
+    await prisma.routeAction.deleteMany({ where: { businessId: CRO.businessId } });
+    await prisma.routeWaypoint.deleteMany({ where: { businessId: CRO.businessId } });
+    await prisma.route.deleteMany({ where: { businessId: CRO.businessId } });
+    await prisma.objective.deleteMany({ where: { businessId: CRO.businessId } });
+    await prisma.business.upsert({ where: { id: CRO.businessId }, create: { id: CRO.businessId, name: CRO.businessId }, update: {} });
+    const obj = await prisma.objective.create({ data: { businessId: CRO.businessId, kind: "signups", target: "100", metric: "users", status: "active" } });
+    const route = await prisma.route.create({ data: { businessId: CRO.businessId, objectiveId: obj.id, source: "case", status: "active" } });
+    const wp = await prisma.routeWaypoint.create({ data: { businessId: CRO.businessId, routeId: route.id, order: 1, title: "Launch", goal: "go live", status: "active" } });
+
+    // Assets bind only while "proposed" (setActionAsset's bind-guard): bind first, then move status.
+    const seedBound = async (type: string, channel: string, kind: string, content: { title?: string; body?: string }) => {
+      const action = await prisma.routeAction.create({ data: { businessId: CRO.businessId, waypointId: wp.id, employeeRole: type === "cro-fix" ? "conversion-optimizer" : "copywriter", type, status: "proposed" } });
+      const { assetId } = await persistAsset(CRO, { channel, kind, content, routeActionId: action.id });
+      await setActionAsset(CRO, action.id, assetId);
+      return action.id;
+    };
+
+    // A normal approved post (a real send) → MUST appear in the send queue.
+    approvedPostId = await seedBound("post", "hackernews", "post", { title: "Show HN", body: "We built X" });
+    await prisma.routeAction.update({ where: { id: approvedPostId }, data: { status: "approved" } });
+
+    // An APPROVED cro-fix (a landing-page fix) → a page fix is NOT a send → EXCLUDED from the queue.
+    approvedCroId = await seedBound("cro-fix", "landing-page", "cro-fix", { title: "Weak CTA", body: "Change 'Learn more' to 'Start free'" });
+    await prisma.routeAction.update({ where: { id: approvedCroId }, data: { status: "approved" } });
+
+    // A PROPOSED cro-fix finding → still reaches /drafts for review (inclusive).
+    proposedCroId = await seedBound("cro-fix", "landing-page", "cro-fix", { title: "No social proof", body: "Add a testimonial above the fold" });
+  });
+
+  it("listSendQueue excludes the approved cro-fix while the normal approved post still appears", async () => {
+    const queue = await listSendQueue(CRO);
+    const ids = queue.map((c) => c.actionId);
+    expect(ids).toContain(approvedPostId);       // a real send stays sendable
+    expect(ids).not.toContain(approvedCroId);     // a page fix is an apply item, not a send
+  });
+
+  it("listProposedDrafts stays inclusive — the proposed cro-fix finding reaches /drafts for review", async () => {
+    const drafts = await listProposedDrafts(CRO);
+    const card = drafts.find((d) => d.actionId === proposedCroId);
+    expect(card).toBeDefined();
+    expect(card).toMatchObject({ type: "cro-fix", channel: "landing-page", title: "No social proof" });
+  });
+});
+
 describe("isRenderableHttpUrl (verified-history href guard)", () => {
   it("accepts http/https and rejects javascript:/data:/garbage/empty (stored-XSS guard)", () => {
     expect(isRenderableHttpUrl("https://example.com/x")).toBe(true);
