@@ -26,7 +26,7 @@
 //         → GROUNDING: normalized evidence must be a NON-EMPTY verbatim substring of the
 //           normalized page text, else DROPPED + logged (stays undrafted → retries)
 //         → PERSIST a bound outreach-email asset {title: subject, body} + setActionAsset
-//     → return ok { drafted, skipped, dropped }.
+//     → return ok { drafted, skipped, dropped, remaining }.
 //
 // Never-auto throughout: the action stays `proposed`, approvedAt null — the founder sends
 // it by hand from their own mail client (spec: "Draft-only until a first-class email
@@ -50,7 +50,7 @@ export const MAX_PITCHES_PER_NIGHT = 3;
 
 export type OutreachDeps = { harness: Harness; models: { brain: string }; fetchOpts?: SafeFetchOptions };
 export type OutreachResult =
-  | { status: "ok"; drafted: string[]; skipped: number; dropped: number } // drafted = actionIds; skipped = unreadable/malformed this night; dropped = grounding failures
+  | { status: "ok"; drafted: string[]; skipped: number; dropped: number; remaining: number } // drafted = actionIds; skipped = unreadable/malformed this night; dropped = grounding failures; remaining = deferred beyond tonight's cap (retries next night, reported)
   | { status: "skipped"; reason: string };
 
 // Whitespace-collapse + lowercase both sides so a verbatim quote grounds even across
@@ -145,9 +145,10 @@ export async function runOutreach(identity: Identity, deps: OutreachDeps): Promi
     try {
       const raw = await deps.harness.runAgent(def, ctx);
       pitch = await parsePitch(raw.finalOutput, async (err) => (await deps.harness.runAgent(def, err)).finalOutput);
-    } catch {
+    } catch (error: unknown) {
       skipped++;
-      console.error(`outreach: skipped request ${request.id} — model output unparseable after retry (retries next night).`);
+      const reason = error instanceof Error ? error.message : "unknown error";
+      console.error(`outreach: skipped request ${request.id} — model step failed: ${reason} (retries next night).`);
       continue;
     }
 
@@ -173,5 +174,5 @@ export async function runOutreach(identity: Identity, deps: OutreachDeps): Promi
     drafted.push(request.id);
   }
 
-  return { status: "ok", drafted, skipped, dropped };
+  return { status: "ok", drafted, skipped, dropped, remaining: remainder };
 }

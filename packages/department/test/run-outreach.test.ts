@@ -141,6 +141,7 @@ describe("runOutreach (founder-targeted -> page-grounded -> draft-only pitches)"
     expect(res.drafted).toEqual([requestId]);
     expect(res.skipped).toBe(0);
     expect(res.dropped).toBe(0);
+    expect(res.remaining).toBe(0); // under the cap → nothing deferred
     expect(harness.calls).toBe(1);
 
     // Never-auto: the request is STILL a proposed outreach-pitch, approvedAt null, now asset-bound.
@@ -240,6 +241,7 @@ describe("runOutreach (founder-targeted -> page-grounded -> draft-only pitches)"
     expect(res.status).toBe("ok");
     if (res.status !== "ok") return;
     expect(res.drafted).toHaveLength(MAX_PITCHES_PER_NIGHT); // exactly 3
+    expect(res.remaining).toBe(1); // the 1 deferred beyond the cap is reported, never silent
     // The OLDEST 3 (ids[0..2]) were drafted; the NEWEST (ids[3]) is the 1 remaining, undrafted.
     expect(res.drafted.sort()).toEqual(ids.slice(0, 3).sort());
     for (const id of ids.slice(0, 3)) {

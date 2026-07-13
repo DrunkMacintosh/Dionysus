@@ -51,7 +51,7 @@ function failureReason(error: unknown): string {
   return error instanceof Error ? error.message : "unknown error";
 }
 
-/** One business's night: plan → radar → metrics → learn → strategy → cro → drafts, each best-effort — never throws to the caller. */
+/** One business's night: plan → radar → metrics → learn → strategy → cro → outreach → drafts, each best-effort — never throws to the caller. */
 export async function runNightly(identity: Identity, deps: NightlyDeps): Promise<NightlyBusinessResult> {
   const businessId = identity.businessId;
   // ONE clock for the whole night — the learn section's boundary time, matching draftWaypoint's
@@ -184,7 +184,7 @@ export async function runNightly(identity: Identity, deps: NightlyDeps): Promise
   try {
     const res = await runOutreach(identity, { harness: deps.harness, models: deps.models, ...(deps.outreachFetchOpts ? { fetchOpts: deps.outreachFetchOpts } : {}) });
     outreach = res.status === "ok"
-      ? { status: "ok", detail: `${res.drafted.length} pitch(es) drafted, ${res.skipped} skipped, ${res.dropped} dropped (ungrounded)` }
+      ? { status: "ok", detail: `${res.drafted.length} pitch(es) drafted, ${res.skipped} skipped, ${res.dropped} dropped (ungrounded)${res.remaining > 0 ? `, ${res.remaining} pending (cap)` : ""}` }
       : { status: "skipped", reason: res.reason };
   } catch (error: unknown) {
     outreach = { status: "failed", reason: failureReason(error) };
