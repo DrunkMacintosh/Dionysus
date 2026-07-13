@@ -94,7 +94,12 @@ export async function runCro(identity: Identity, deps: CroDeps): Promise<CroResu
   // evidence is a normalized substring of the freshly-fetched text; drop the rest
   // BEFORE anything is written (a fabricated finding is never persisted).
   const pageNorm = norm(result.text);
-  const survivors = parsed.findings.filter((f) => pageNorm.includes(norm(f.evidence)));
+  // An evidence that normalizes to "" (whitespace-only) would trivially `includes("")` —
+  // an empty quote grounds nothing, so it is a fabrication too.
+  const survivors = parsed.findings.filter((f) => {
+    const evidenceNorm = norm(f.evidence);
+    return evidenceNorm.length > 0 && pageNorm.includes(evidenceNorm);
+  });
   const dropped = parsed.findings.length - survivors.length;
   if (dropped > 0) {
     console.error(`cro: dropped ${dropped} finding(s) whose evidence is not verbatim on the fetched page (fabrication).`);

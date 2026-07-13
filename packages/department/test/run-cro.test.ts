@@ -53,6 +53,12 @@ const ONE_GROUNDED_ONE_FAB = JSON.stringify({ findings: [
   { issue: FAB_ISSUE, evidence: FAB_EVIDENCE, recommendation: "Add customer logos" },
 ]});
 
+// An evidence that is all whitespace (>= 8 chars, so it passes the schema) grounds NOTHING —
+// `includes("")` would trivially match; it must be dropped like any fabrication.
+const WHITESPACE_EVIDENCE = JSON.stringify({ findings: [
+  { issue: "Blank quote", evidence: "          ", recommendation: "nope" },
+]});
+
 const actionCount = (biz: string) => prisma.routeAction.count({ where: { businessId: biz } });
 const assetCount = (biz: string) => prisma.asset.count({ where: { businessId: biz } });
 
@@ -169,6 +175,19 @@ describe("runCro (fresh page -> verbatim-grounded findings -> never-auto fixes)"
     expect(assets.some((a) => a.contentJson.includes(FAB_EVIDENCE))).toBe(false);
     // The survivor is the grounded one.
     expect(actions[0]!.rationale).toContain("Start your free trial today");
+  });
+
+  it("FABRICATION DROPPED: a whitespace-only evidence grounds nothing and never persists", async () => {
+    const BIZ = "biz_cro_blank";
+    await seedTenant(BIZ, {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await runCro({ businessId: BIZ }, deps(fakeHarness(WHITESPACE_EVIDENCE)));
+    expect(res.status).toBe("ok");
+    if (res.status !== "ok") return;
+    expect(res.actionIds).toHaveLength(0);
+    expect(res.dropped).toBe(1);
+    expect(await actionCount(BIZ)).toBe(0);
+    expect(await assetCount(BIZ)).toBe(0);
   });
 
   it("DEGRADE no product: skipped with NO model call, nothing persisted", async () => {
