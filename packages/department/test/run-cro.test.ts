@@ -239,6 +239,30 @@ describe("runCro (fresh page -> verbatim-grounded findings -> never-auto fixes)"
     expect(await assetCount(BIZ)).toBe(assetsAfterFirst);
   });
 
+  it("ASSETLESS ORPHAN never wedges: a proposed cro-fix with assetId null does NOT suppress a re-run", async () => {
+    const BIZ = "biz_cro_orphan";
+    await seedTenant(BIZ, {});
+    // A crash between upsertRouteAction and setActionAsset leaves a proposed cro-fix
+    // action with assetId null: it matches the old standing predicate (proposed +
+    // "cro":true) yet is invisible on /drafts (listProposedDrafts requires assetId).
+    // Such an orphan must NEVER wedge the employee — runCro must still proceed.
+    const wp = await prisma.routeWaypoint.findFirst({ where: { businessId: BIZ, status: "active" } });
+    await prisma.routeAction.create({ data: {
+      businessId: BIZ, waypointId: wp!.id, employeeRole: "conversion-optimizer", type: "cro-fix",
+      status: "proposed", featuresJson: '{"channel":"landing-page","cro":true}', assetId: null } });
+
+    const res = await runCro({ businessId: BIZ }, deps(fakeHarness(TWO_GROUNDED)));
+
+    // Must PROCEED — not skip "CRO findings already pending review".
+    expect(res.status).toBe("ok");
+    if (res.status !== "ok") return;
+    expect(res.actionIds).toHaveLength(2);
+    // The two fresh grounded findings landed WITH bound assets (visible on /drafts).
+    const bound = await prisma.routeAction.findMany({ where: { businessId: BIZ, type: "cro-fix", assetId: { not: null } } });
+    expect(bound).toHaveLength(2);
+    expect(await assetCount(BIZ)).toBe(2);
+  });
+
   it("BUDGET fail-closed FIRST: over cap throws, NO model call, nothing persisted", async () => {
     const BIZ = "biz_cro_budget";
     await seedTenant(BIZ, { tokens: 0 });

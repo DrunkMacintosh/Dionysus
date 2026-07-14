@@ -68,8 +68,13 @@ export async function runCro(identity: Identity, deps: CroDeps): Promise<CroResu
 
   // 4. ONE-STANDING: a proposed cro finding already pending review suppresses a
   // re-run (no duplicate audits stacking up in the queue). Scoped to this business.
+  // assetId!=null on purpose (mirrors run-seo step 3): a pending review must be
+  // VISIBLE on /drafts (listProposedDrafts requires a bound asset). An assetless
+  // orphan — a proposed cro-fix left when a crash split the three persist awaits —
+  // is invisible there, so the founder could never clear it; it must never wedge
+  // the employee forever. Only a bound (visible, clearable) finding suppresses.
   const standing = await prisma.routeAction.findFirst({
-    where: { businessId: identity.businessId, status: "proposed", featuresJson: { contains: '"cro":true' } } });
+    where: { businessId: identity.businessId, status: "proposed", featuresJson: { contains: '"cro":true' }, assetId: { not: null } } });
   if (standing) return { status: "skipped", reason: "CRO findings already pending review" };
 
   // 5. FRESH fetch (SSRF-guarded). An unreadable page degrades to skip with NO
