@@ -117,6 +117,15 @@ describe("runNightly", () => {
     expect(res.outreach).toBeDefined();
     expect(res.outreach).toMatchObject({ status: "skipped", reason: "no pitch requests pending" });
   });
+
+  it("the seo section skips (honestly) when the founder has no product page on record", async () => {
+    // The standard fixture (Alpha Co) has NO Product row → runSeo skips with "no product page on
+    // record" BEFORE any fetch. Zero model calls by construction (runSeo takes no harness).
+    // (The drafting path — a readable page — is the T3 eval gate's job.)
+    const res = await runNightly(A, { harness: goodHarness(), models: { brain: "fake" }, hnTransport });
+    expect(res.seo).toBeDefined();
+    expect(res.seo).toMatchObject({ status: "skipped", reason: "no product page on record" });
+  });
 });
 
 // ── Stage 6f: the nightly PLAN section (bootstrap the first route) ────────────

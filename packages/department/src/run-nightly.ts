@@ -1,16 +1,18 @@
-// Stage 6a/6b/6c/6e/6f/6g — the NIGHTLY WAKE (the D30 platform-trigger slice). One unattended routine
-// per business, EIGHT best-effort + independent sections in order: PLAN (6f: the bootstrap — a
+// Stage 6a/6b/6c/6e/6f/6g/6h — the NIGHTLY WAKE (the D30 platform-trigger slice). One unattended routine
+// per business, NINE best-effort + independent sections in order: PLAN (6f: the bootstrap — a
 // founder-stated objective with no route yet gets its FIRST route proposed from the best
 // discovered case, so it runs BEFORE the rest can see the new route) → radar sensing (4e) →
 // metric ingestion (5d) → LEARN (6b: refresh craft+performance beliefs, then recommend the
 // next action — deterministic, never-auto) → STRATEGY (6c: propose a founder-gated route
 // revision when the plan measurably stalls) → CRO (6e: on the measured-flat signal, the page
 // may be the leak — the Conversion Optimizer audits the founder's OWN landing page for fixes) →
+// SEO (6h: the SEO/AEO Strategist runs a fully DETERMINISTIC on-page audit of the founder's own
+// page — zero model calls by construction, page-change deduped) →
 // OUTREACH (6g: draft the founder's pending pitch requests, each grounded in the target's page —
 // founder-targeted only, never invents a target) → DRAFTS (6b: draft the undrafted proposals so
-// the founder wakes to a reviewable morning briefing). CRO and OUTREACH run BEFORE drafts on
+// the founder wakes to a reviewable morning briefing). CRO, SEO and OUTREACH run BEFORE drafts on
 // purpose: they persist COMPLETE (asset-bound) proposals, so the drafts section's assetless-only
-// filter never re-drafts a CRO finding or an outreach pitch. All under the
+// filter never re-drafts a CRO finding, an SEO audit or an outreach pitch. All under the
 // business's OWN ambient identity (D27.1). The sweep is the platform operator: it iterates
 // businesses but never mixes tenants, and one business's failure NEVER blocks the next
 // (per-business isolation, summary-reported). Budget stays fail-closed INSIDE
@@ -29,6 +31,7 @@ import type { Harness } from "./llm/types.js";
 import type { HnTransport } from "./tools/hn-source.js";
 import { runRadar } from "./run-radar.js";
 import { runCro } from "./run-cro.js";
+import { runSeo } from "./run-seo.js";
 import { runOutreach } from "./run-outreach.js";
 import { draftWaypoint } from "./draft-waypoint.js";
 import { proposeRoute } from "./propose-route.js";
@@ -39,19 +42,20 @@ export type NightlyDeps = {
   hnTransport?: HnTransport;         // test seam; production uses the real HN fetch
   metricTransport?: MetricTransport; // test seam; production defaults to the SSRF-guarded adapter
   croFetchOpts?: SafeFetchOptions;   // test seam; production uses the real SSRF-guarded page fetch
+  seoFetchOpts?: SafeFetchOptions;   // test seam; production uses the real SSRF-guarded page fetch (zero-model audit)
   outreachFetchOpts?: SafeFetchOptions; // test seam; production uses the real SSRF-guarded target-page fetch
 };
 export type SectionResult =
   | { status: "ok"; detail: string }
   | { status: "skipped"; reason: string }
   | { status: "failed"; reason: string };
-export type NightlyBusinessResult = { businessId: string; plan: SectionResult; radar: SectionResult; metrics: SectionResult; learn: SectionResult; strategy: SectionResult; cro: SectionResult; outreach: SectionResult; drafts: SectionResult };
+export type NightlyBusinessResult = { businessId: string; plan: SectionResult; radar: SectionResult; metrics: SectionResult; learn: SectionResult; strategy: SectionResult; cro: SectionResult; seo: SectionResult; outreach: SectionResult; drafts: SectionResult };
 
 function failureReason(error: unknown): string {
   return error instanceof Error ? error.message : "unknown error";
 }
 
-/** One business's night: plan → radar → metrics → learn → strategy → cro → outreach → drafts, each best-effort — never throws to the caller. */
+/** One business's night: plan → radar → metrics → learn → strategy → cro → seo → outreach → drafts, each best-effort — never throws to the caller. */
 export async function runNightly(identity: Identity, deps: NightlyDeps): Promise<NightlyBusinessResult> {
   const businessId = identity.businessId;
   // ONE clock for the whole night — the learn section's boundary time, matching draftWaypoint's
@@ -174,6 +178,20 @@ export async function runNightly(identity: Identity, deps: NightlyDeps): Promise
     cro = { status: "failed", reason: failureReason(error) }; // incl. the budget fail-closed throw
   }
 
+  // SEO — deterministic on-page audit of the founder's own page (D25). Zero
+  // model calls by construction (runSeo takes no harness); no budget gate.
+  // Runs AFTER cro and BEFORE outreach/drafts: runSeo persists a COMPLETE (asset-bound)
+  // seo-audit proposal, so the drafts section's assetless-only filter never re-drafts it.
+  let seo: SectionResult;
+  try {
+    const res = await runSeo(identity, deps.seoFetchOpts ? { fetchOpts: deps.seoFetchOpts } : {});
+    seo = res.status === "ok"
+      ? { status: "ok", detail: `audit drafted: ${res.fail} fail, ${res.warn} warn` }
+      : { status: "skipped", reason: res.reason };
+  } catch (error: unknown) {
+    seo = { status: "failed", reason: failureReason(error) };
+  }
+
   // OUTREACH — draft the founder's pending pitch requests, grounded in each target's page.
   // Founder-targeted only: this drafts EXISTING requests; no model call ever invents a target.
   // Runs AFTER cro and BEFORE drafts: runOutreach persists COMPLETE (asset-bound) outreach-pitch
@@ -211,7 +229,7 @@ export async function runNightly(identity: Identity, deps: NightlyDeps): Promise
     drafts = { status: "failed", reason: failureReason(error) }; // incl. budget fail-closed
   }
 
-  return { businessId, plan, radar, metrics, learn, strategy, cro, outreach, drafts };
+  return { businessId, plan, radar, metrics, learn, strategy, cro, seo, outreach, drafts };
 }
 
 /** The platform sweep: every business, each under its own identity, failures isolated. */
@@ -230,6 +248,7 @@ export async function runNightlySweep(deps: NightlyDeps): Promise<NightlyBusines
         learn: { status: "failed", reason: failureReason(error) },
         strategy: { status: "failed", reason: failureReason(error) },
         cro: { status: "failed", reason: failureReason(error) },
+        seo: { status: "failed", reason: failureReason(error) },
         outreach: { status: "failed", reason: failureReason(error) },
         drafts: { status: "failed", reason: failureReason(error) } });
     }

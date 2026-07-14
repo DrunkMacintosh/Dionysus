@@ -97,9 +97,10 @@ export async function listSendQueue(identity: Identity): Promise<SendCard[]> {
     // A cro-fix (Stage 6e) is a landing-page fix the FOUNDER applies to their OWN site by hand —
     // an apply-checklist item, NOT a copy-paste public send. An outreach-pitch (Stage 6g) is a
     // PRIVATE email the founder sends by hand from their own mail client — it has no public URL
-    // to verify. Neither enters the send queue. (Both still reach /drafts via listProposedDrafts,
-    // which stays inclusive.)
-    if (asset.kind === "cro-fix" || asset.kind === "outreach-pitch") continue;
+    // to verify. An seo-audit (Stage 6h) is a deterministic on-page checklist the founder applies
+    // to their OWN page by hand — apply-checklist semantics, like cro-fix. None enters the send
+    // queue. (All still reach /drafts via listProposedDrafts, which stays inclusive.)
+    if (asset.kind === "cro-fix" || asset.kind === "outreach-pitch" || asset.kind === "seo-audit") continue;
     const wp = await prisma.routeWaypoint.findFirst({ where: { id: action.waypointId, businessId: identity.businessId } });
     let title: string | null = null;
     let body: string | null = null;

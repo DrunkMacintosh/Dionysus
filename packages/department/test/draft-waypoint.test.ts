@@ -89,6 +89,33 @@ describe("draftWaypoint never drafts an outreach-pitch (6g)", () => {
   });
 });
 
+describe("draftWaypoint never drafts an seo-audit (6h)", () => {
+  it("skips an assetless proposed seo-audit — a deterministic SEO checklist is never copywriter content", async () => {
+    const SEO = { businessId: "biz_draft_seo" };
+    await prisma.asset.deleteMany({ where: { businessId: SEO.businessId } });
+    await prisma.routeAction.deleteMany({ where: { businessId: SEO.businessId } });
+    await prisma.routeWaypoint.deleteMany({ where: { businessId: SEO.businessId } });
+    await prisma.route.deleteMany({ where: { businessId: SEO.businessId } });
+    await prisma.objective.deleteMany({ where: { businessId: SEO.businessId } });
+    await prisma.business.upsert({ where: { id: SEO.businessId },
+      create: { id: SEO.businessId, name: "Seo Co", maxTokensPerDay: 100000 }, update: { maxTokensPerDay: 100000 } });
+    const obj = await prisma.objective.create({ data: { businessId: SEO.businessId, kind: "signups", target: "100", metric: "users", status: "active" } });
+    const route = await prisma.route.create({ data: { businessId: SEO.businessId, objectiveId: obj.id, source: "case", status: "proposed" } });
+    const wp = await prisma.routeWaypoint.create({ data: { businessId: SEO.businessId, routeId: route.id, order: 1, title: "Launch", goal: "g", status: "active" } });
+    // A proposed seo-audit with NO asset (drafted by runSeo, not the copywriter) + a normal post to draft.
+    await prisma.routeAction.create({ data: { businessId: SEO.businessId, waypointId: wp.id, employeeRole: "seo", type: "seo-audit", status: "proposed", featuresJson: JSON.stringify({ channel: "seo", seo: true }) } });
+    await prisma.routeAction.create({ data: { businessId: SEO.businessId, waypointId: wp.id, employeeRole: "copywriter", type: "post", status: "proposed", featuresJson: JSON.stringify({ channel: "x" }) } });
+
+    const res = await draftWaypoint(SEO, { waypointId: wp.id }, { harness: fakeHarness(), models: { brain: "fake" } });
+    // ONLY the post was drafted; the seo-audit was left untouched (no wrong-role draft, no asset).
+    expect(res.drafts).toHaveLength(1);
+    expect(res.drafts[0]?.channel).toBe("x");
+    const seoAction = await prisma.routeAction.findFirst({ where: { businessId: SEO.businessId, type: "seo-audit" } });
+    expect(seoAction?.assetId).toBeNull();
+    expect(await prisma.asset.count({ where: { businessId: SEO.businessId } })).toBe(1);
+  });
+});
+
 describe("draftWaypoint (parallel fan-out)", () => {
   it("drafts one channel-native asset per proposed action, linked + assetId set", async () => {
     const res = await draftWaypoint(IDENTITY, { waypointId }, { harness: fakeHarness(), models: { brain: "fake" } });

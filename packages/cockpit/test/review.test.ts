@@ -383,6 +383,66 @@ describe("outreach-pitch send-queue exclusion / drafts inclusion", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// SEO send-queue exclusion (Stage 6h) — an seo-audit asset is a deterministic
+// on-page checklist the founder applies to their OWN page by hand; it has no
+// public URL to verify, so listSendQueue EXCLUDES kind:"seo-audit" (the cro-fix
+// apply-checklist semantics). listProposedDrafts stays INCLUSIVE so the audit still
+// reaches /drafts for founder review.
+// ---------------------------------------------------------------------------
+const SENDSEO = { businessId: "biz_cockpit_sendseo" };
+
+describe("seo-audit send-queue exclusion / drafts inclusion", () => {
+  let approvedPostId = "";
+  let approvedSeoId = "";
+  let proposedSeoId = "";
+
+  beforeAll(async () => {
+    await prisma.asset.deleteMany({ where: { businessId: SENDSEO.businessId } });
+    await prisma.routeAction.deleteMany({ where: { businessId: SENDSEO.businessId } });
+    await prisma.routeWaypoint.deleteMany({ where: { businessId: SENDSEO.businessId } });
+    await prisma.route.deleteMany({ where: { businessId: SENDSEO.businessId } });
+    await prisma.objective.deleteMany({ where: { businessId: SENDSEO.businessId } });
+    await prisma.business.upsert({ where: { id: SENDSEO.businessId }, create: { id: SENDSEO.businessId, name: SENDSEO.businessId }, update: {} });
+    const obj = await prisma.objective.create({ data: { businessId: SENDSEO.businessId, kind: "signups", target: "100", metric: "users", status: "active" } });
+    const route = await prisma.route.create({ data: { businessId: SENDSEO.businessId, objectiveId: obj.id, source: "case", status: "active" } });
+    const wp = await prisma.routeWaypoint.create({ data: { businessId: SENDSEO.businessId, routeId: route.id, order: 1, title: "Launch", goal: "go live", status: "active" } });
+
+    // Assets bind only while "proposed" (setActionAsset's bind-guard): bind first, then move status.
+    const seedBound = async (type: string, channel: string, kind: string, content: { title?: string; body?: string }) => {
+      const action = await prisma.routeAction.create({ data: { businessId: SENDSEO.businessId, waypointId: wp.id, employeeRole: type === "seo-audit" ? "seo" : "copywriter", type, status: "proposed" } });
+      const { assetId } = await persistAsset(SENDSEO, { channel, kind, content, routeActionId: action.id });
+      await setActionAsset(SENDSEO, action.id, assetId);
+      return action.id;
+    };
+
+    // A normal approved post (a real send) → MUST appear in the send queue.
+    approvedPostId = await seedBound("post", "hackernews", "post", { title: "Show HN", body: "We built X" });
+    await prisma.routeAction.update({ where: { id: approvedPostId }, data: { status: "approved" } });
+
+    // An APPROVED seo-audit (an apply-checklist for the founder's own page) → EXCLUDED from the queue.
+    approvedSeoId = await seedBound("seo-audit", "seo", "seo-audit", { title: "SEO/AEO audit", body: "[FAIL] meta-description — absent" });
+    await prisma.routeAction.update({ where: { id: approvedSeoId }, data: { status: "approved" } });
+
+    // A PROPOSED seo-audit → still reaches /drafts for review (inclusive).
+    proposedSeoId = await seedBound("seo-audit", "seo", "seo-audit", { title: "SEO/AEO audit 2", body: "[WARN] canonical — absent" });
+  });
+
+  it("listSendQueue excludes the approved seo-audit while the normal approved post still appears", async () => {
+    const queue = await listSendQueue(SENDSEO);
+    const ids = queue.map((c) => c.actionId);
+    expect(ids).toContain(approvedPostId);      // a real send stays sendable
+    expect(ids).not.toContain(approvedSeoId);   // an apply-checklist is founder-applied, not a queue send
+  });
+
+  it("listProposedDrafts stays inclusive — the proposed seo-audit reaches /drafts for review", async () => {
+    const drafts = await listProposedDrafts(SENDSEO);
+    const card = drafts.find((d) => d.actionId === proposedSeoId);
+    expect(card).toBeDefined();
+    expect(card).toMatchObject({ type: "seo-audit", channel: "seo", title: "SEO/AEO audit 2" });
+  });
+});
+
 describe("isRenderableHttpUrl (verified-history href guard)", () => {
   it("accepts http/https and rejects javascript:/data:/garbage/empty (stored-XSS guard)", () => {
     expect(isRenderableHttpUrl("https://example.com/x")).toBe(true);
