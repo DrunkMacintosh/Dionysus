@@ -8,6 +8,7 @@ const A = { businessId: "biz_nightly_a" };
 const B = { businessId: "biz_nightly_b" };
 
 async function wipe(businessId: string) {
+  await prisma.nightlyRun.deleteMany({ where: { businessId } });
   await prisma.memoryEdge.deleteMany({ where: { businessId } });
   await prisma.memoryNode.deleteMany({ where: { businessId } });
   await prisma.metricSnapshot.deleteMany({ where: { businessId } });
@@ -220,6 +221,29 @@ describe("runNightly — plan section (stage 6f bootstrap)", () => {
     expect(res.plan).toMatchObject({ status: "skipped", reason: expect.stringContaining("no discovered cases") });
     expect(await prisma.route.count({ where: { businessId: NOCASE.businessId } })).toBe(0);
     expect(inputs.some((i) => i.includes("Chosen case:"))).toBe(false); // the honest skip made no model call
+  });
+});
+
+// ── Stage 6j: the nightly writes its diary (best-effort, verbatim) ────────────
+describe("runNightly — the activity diary (stage 6j)", () => {
+  beforeEach(async () => { await seedBusiness(A.businessId, "Alpha Co"); });
+
+  it("writes exactly ONE verbatim activity record whose sections deep-equal the returned result", async () => {
+    const res = await runNightly(A, { harness: goodHarness(), models: { brain: "fake" }, hnTransport });
+    const rows = await prisma.nightlyRun.findMany({ where: { businessId: A.businessId } });
+    expect(rows).toHaveLength(1);
+    // VERBATIM: the persisted section map is exactly the returned one (businessId dropped).
+    const { businessId: _businessId, ...sections } = res;
+    expect(JSON.parse(rows[0]!.sectionsJson)).toEqual(sections);
+  });
+
+  it("NEVER FAILS THE NIGHT: a vanished businessId RESOLVES with zero records (the FK failure lands in the catch)", async () => {
+    const ghost = { businessId: "biz_nightly_ghost" };
+    await prisma.nightlyRun.deleteMany({ where: { businessId: ghost.businessId } });
+    // Every section degrades (no business row); the diary write FK-fails and is swallowed.
+    const res = await runNightly(ghost, { harness: goodHarness(), models: { brain: "fake" }, hnTransport });
+    expect(res.businessId).toBe(ghost.businessId); // resolved — did NOT throw
+    expect(await prisma.nightlyRun.count({ where: { businessId: ghost.businessId } })).toBe(0);
   });
 });
 

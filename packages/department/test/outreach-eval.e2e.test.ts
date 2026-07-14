@@ -113,6 +113,7 @@ const TENANTS = ["biz_outreacheval_founder", "biz_outreacheval_ground", "biz_out
 // FK-safe teardown (edges → nodes → revisions → snapshots → integrations → assets → actions →
 // waypoints → routes → objectives → products); leaves the Business row alone. Children first.
 async function wipeChildren(businessId: string): Promise<void> {
+  await prisma.nightlyRun.deleteMany({ where: { businessId } }); // 6j: the diary FK-guards business deletion
   await prisma.memoryEdge.deleteMany({ where: { businessId } });
   await prisma.memoryNode.deleteMany({ where: { businessId } });
   await prisma.routeRevision.deleteMany({ where: { businessId } });

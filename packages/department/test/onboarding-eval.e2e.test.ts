@@ -90,6 +90,7 @@ async function seedCase(businessId: string, rank: number, name: string) {
 // FK-safe teardown (edges → nodes → revisions → snapshots → integrations → assets →
 // actions → waypoints → routes → objectives → cases → products); leaves the Business row.
 async function wipeChildren(businessId: string): Promise<void> {
+  await prisma.nightlyRun.deleteMany({ where: { businessId } }); // 6j: the diary FK-guards business deletion
   await prisma.memoryEdge.deleteMany({ where: { businessId } });
   await prisma.memoryNode.deleteMany({ where: { businessId } });
   await prisma.routeRevision.deleteMany({ where: { businessId } });

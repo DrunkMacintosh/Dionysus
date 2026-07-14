@@ -17,7 +17,8 @@
 // businesses but never mixes tenants, and one business's failure NEVER blocks the next
 // (per-business isolation, summary-reported). Budget stays fail-closed INSIDE
 // runRadar/draftWaypoint/runCro (they throw before any model call when the gate refuses) — the
-// nightly reports that as `failed` and moves on.
+// nightly reports that as `failed` and moves on. The night ENDS by writing its VERBATIM activity
+// record (6j), best-effort — the diary never fails the night.
 import type { Identity } from "dionysus-mcp/identity";
 import { prisma } from "dionysus-mcp/db";
 import { ingestMetrics, metricTransportFromSafeFetch, type MetricTransport } from "dionysus-mcp/tools/analytics";
@@ -26,6 +27,7 @@ import { derivePerformanceBeliefs } from "dionysus-mcp/tools/performance-belief"
 import { recommendNextAction } from "dionysus-mcp/tools/recommend";
 import { analyzeRouteForRevision } from "dionysus-mcp/tools/growth-analyst";
 import { buildCmoReport } from "dionysus-mcp/tools/cmo-report";
+import { recordNightlyRun } from "dionysus-mcp/tools/nightly-run";
 import type { SafeFetchOptions } from "dionysus-mcp/lib/ssrf";
 import type { Harness } from "./llm/types.js";
 import type { HnTransport } from "./tools/hn-source.js";
@@ -229,7 +231,18 @@ export async function runNightly(identity: Identity, deps: NightlyDeps): Promise
     drafts = { status: "failed", reason: failureReason(error) }; // incl. budget fail-closed
   }
 
-  return { businessId, plan, radar, metrics, learn, strategy, cro, seo, outreach, drafts };
+  const result = { businessId, plan, radar, metrics, learn, strategy, cro, seo, outreach, drafts };
+
+  // 6j — the activity diary: persist the night's section results VERBATIM so the
+  // founder can see what ran, what was skipped, and why (/activity). BEST-EFFORT:
+  // the diary must never fail the night — a record failure is logged and swallowed.
+  try {
+    await recordNightlyRun(identity, { sections: { plan, radar, metrics, learn, strategy, cro, seo, outreach, drafts } });
+  } catch (error: unknown) {
+    console.error(`nightly: activity record failed (${failureReason(error)}) — the night's work is unaffected.`);
+  }
+
+  return result;
 }
 
 /** The platform sweep: every business, each under its own identity, failures isolated. */
