@@ -236,8 +236,11 @@ export async function runNightly(identity: Identity, deps: NightlyDeps): Promise
   // 6j — the activity diary: persist the night's section results VERBATIM so the
   // founder can see what ran, what was skipped, and why (/activity). BEST-EFFORT:
   // the diary must never fail the night — a record failure is logged and swallowed.
+  // The section map is DERIVED from `result` (not re-listed) so a future tenth
+  // section can never drift between the diary and the return value.
+  const { businessId: _recordedBusinessId, ...sections } = result;
   try {
-    await recordNightlyRun(identity, { sections: { plan, radar, metrics, learn, strategy, cro, seo, outreach, drafts } });
+    await recordNightlyRun(identity, { sections });
   } catch (error: unknown) {
     console.error(`nightly: activity record failed (${failureReason(error)}) — the night's work is unaffected.`);
   }
