@@ -443,6 +443,53 @@ describe("seo-audit send-queue exclusion / drafts inclusion", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Storyboard send-queue exclusion (Stage 6i) — a storyboard is a filmable shot list
+// the FOUNDER films and posts by hand; it has no public URL to verify, so listSendQueue
+// EXCLUDES kind:"storyboard" (the cro-fix/outreach/seo apply-checklist semantics).
+// ---------------------------------------------------------------------------
+const SENDVID = { businessId: "biz_cockpit_sendvideo" };
+
+describe("storyboard send-queue exclusion (6i)", () => {
+  let approvedPostId = "";
+  let approvedStoryboardId = "";
+
+  beforeAll(async () => {
+    await prisma.asset.deleteMany({ where: { businessId: SENDVID.businessId } });
+    await prisma.routeAction.deleteMany({ where: { businessId: SENDVID.businessId } });
+    await prisma.routeWaypoint.deleteMany({ where: { businessId: SENDVID.businessId } });
+    await prisma.route.deleteMany({ where: { businessId: SENDVID.businessId } });
+    await prisma.objective.deleteMany({ where: { businessId: SENDVID.businessId } });
+    await prisma.business.upsert({ where: { id: SENDVID.businessId }, create: { id: SENDVID.businessId, name: SENDVID.businessId }, update: {} });
+    const obj = await prisma.objective.create({ data: { businessId: SENDVID.businessId, kind: "signups", target: "100", metric: "users", status: "active" } });
+    const route = await prisma.route.create({ data: { businessId: SENDVID.businessId, objectiveId: obj.id, source: "case", status: "active" } });
+    const wp = await prisma.routeWaypoint.create({ data: { businessId: SENDVID.businessId, routeId: route.id, order: 1, title: "Launch", goal: "go live", status: "active" } });
+
+    // Assets bind only while "proposed" (setActionAsset's bind-guard): bind first, then move status.
+    const seedBound = async (employeeRole: string, channel: string, kind: string, content: { title?: string; body?: string }) => {
+      const action = await prisma.routeAction.create({ data: { businessId: SENDVID.businessId, waypointId: wp.id, employeeRole, type: "post", status: "proposed" } });
+      const { assetId } = await persistAsset(SENDVID, { channel, kind, content, routeActionId: action.id });
+      await setActionAsset(SENDVID, action.id, assetId);
+      return action.id;
+    };
+
+    // A normal approved post (a real send) → MUST appear in the send queue.
+    approvedPostId = await seedBound("copywriter", "hackernews", "post", { title: "Show HN", body: "We built X" });
+    await prisma.routeAction.update({ where: { id: approvedPostId }, data: { status: "approved" } });
+
+    // An APPROVED storyboard (the founder films + posts it by hand) → EXCLUDED from the queue.
+    approvedStoryboardId = await seedBound("videographer", "tiktok", "storyboard", { title: "The hook", body: "1. [open on phone] hi\n\nCaption: follow" });
+    await prisma.routeAction.update({ where: { id: approvedStoryboardId }, data: { status: "approved" } });
+  });
+
+  it("listSendQueue excludes the approved storyboard while the normal approved post still appears", async () => {
+    const queue = await listSendQueue(SENDVID);
+    const ids = queue.map((c) => c.actionId);
+    expect(ids).toContain(approvedPostId);          // a real send stays sendable
+    expect(ids).not.toContain(approvedStoryboardId); // a filmed-by-hand storyboard is never a queue send
+  });
+});
+
 describe("isRenderableHttpUrl (verified-history href guard)", () => {
   it("accepts http/https and rejects javascript:/data:/garbage/empty (stored-XSS guard)", () => {
     expect(isRenderableHttpUrl("https://example.com/x")).toBe(true);

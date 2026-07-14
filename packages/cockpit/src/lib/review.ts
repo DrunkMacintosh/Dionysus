@@ -98,9 +98,10 @@ export async function listSendQueue(identity: Identity): Promise<SendCard[]> {
     // an apply-checklist item, NOT a copy-paste public send. An outreach-pitch (Stage 6g) is a
     // PRIVATE email the founder sends by hand from their own mail client — it has no public URL
     // to verify. An seo-audit (Stage 6h) is a deterministic on-page checklist the founder applies
-    // to their OWN page by hand — apply-checklist semantics, like cro-fix. None enters the send
-    // queue. (All still reach /drafts via listProposedDrafts, which stays inclusive.)
-    if (asset.kind === "cro-fix" || asset.kind === "outreach-pitch" || asset.kind === "seo-audit") continue;
+    // to their OWN page by hand — apply-checklist semantics, like cro-fix. A storyboard (Stage 6i)
+    // is filmed and posted by hand — no public-URL verified-send contract for a hand-posted video
+    // yet. None enters the send queue. (All still reach /drafts via listProposedDrafts, inclusive.)
+    if (asset.kind === "cro-fix" || asset.kind === "outreach-pitch" || asset.kind === "seo-audit" || asset.kind === "storyboard") continue;
     const wp = await prisma.routeWaypoint.findFirst({ where: { id: action.waypointId, businessId: identity.businessId } });
     let title: string | null = null;
     let body: string | null = null;

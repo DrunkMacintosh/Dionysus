@@ -571,3 +571,118 @@ describe("draftWaypoint craft-belief recall (5c)", () => {
     expect(inputs.some((i) => i.includes("What I've learned"))).toBe(true); // and recalled into the prompt
   });
 });
+
+// Stage 6i Task 2: video channels route to the VIDEOGRAPHER — a filmable storyboard,
+// not text copy. Routing is SERVER-derived from features.channel (case-insensitive),
+// falling back to action.type; the model never picks its own router. A video action's
+// asset is kind "storyboard" (title = concept, body = numbered `N. [shot] text` lines +
+// Caption); a non-video action stays byte-identical to the copywriter path.
+describe("draftWaypoint videographer routing (6i)", () => {
+  // A dual-purpose harness keyed on input CONTENT: the videographer call carries the
+  // "storyboard a short-form video" marker → storyboard JSON; every other call is the
+  // copywriter → draft JSON. `sceneCount` drives the truncate probe. Captures inputs.
+  function videoHarness(captured: string[], sceneCount = 3): Harness {
+    return {
+      async runAgent(_def: AgentDef, input: string) {
+        captured.push(input);
+        if (input.includes("storyboard a short-form video")) {
+          const scenes = Array.from({ length: sceneCount }, (_, i) => ({ shot: `shot ${i + 1}`, text: `line ${i + 1}` }));
+          return { finalOutput: JSON.stringify({ concept: "The hook", scenes, caption: "Follow for more" }) };
+        }
+        return { finalOutput: JSON.stringify({ channel: "x", kind: "post", content: { title: "T", body: "Draft copy body" } }) };
+      },
+      async completeOnce() { return "unused"; },
+    };
+  }
+
+  async function seedWaypoint(businessId: string, channels: string[]): Promise<{ wpId: string; actionByChannel: Record<string, string> }> {
+    await prisma.memoryEdge.deleteMany({ where: { businessId } });
+    await prisma.memoryNode.deleteMany({ where: { businessId } });
+    await prisma.asset.deleteMany({ where: { businessId } });
+    await prisma.routeAction.deleteMany({ where: { businessId } });
+    await prisma.routeWaypoint.deleteMany({ where: { businessId } });
+    await prisma.route.deleteMany({ where: { businessId } });
+    await prisma.objective.deleteMany({ where: { businessId } });
+    await prisma.business.upsert({ where: { id: businessId },
+      create: { id: businessId, name: businessId, maxTokensPerDay: 100000 }, update: { maxTokensPerDay: 100000 } });
+    const obj = await prisma.objective.create({ data: { businessId, kind: "signups", target: "100", metric: "users", status: "active" } });
+    const route = await prisma.route.create({ data: { businessId, objectiveId: obj.id, source: "case", status: "proposed" } });
+    const wp = await prisma.routeWaypoint.create({ data: { businessId, routeId: route.id, order: 1, title: "Launch", goal: "20 signups", status: "active" } });
+    const actionByChannel: Record<string, string> = {};
+    for (const channel of channels) {
+      const a = await prisma.routeAction.create({ data: { businessId, waypointId: wp.id, employeeRole: "copywriter", type: "post", status: "proposed", featuresJson: JSON.stringify({ channel }) } });
+      actionByChannel[channel] = a.id;
+    }
+    return { wpId: wp.id, actionByChannel };
+  }
+
+  it("ROUTING — a tiktok action gets a storyboard; an x action keeps the copywriter shape; markers never cross", async () => {
+    const VID = "biz_draft_video_routing";
+    const { wpId, actionByChannel } = await seedWaypoint(VID, ["tiktok", "x"]);
+    const captured: string[] = [];
+    const res = await draftWaypoint({ businessId: VID }, { waypointId: wpId }, { harness: videoHarness(captured), models: { brain: "fake" } });
+
+    expect(res.drafts).toHaveLength(2);
+    const vidDraft = res.drafts.find((d) => d.channel === "tiktok")!;
+    const copyDraft = res.drafts.find((d) => d.channel === "x")!;
+
+    // (a) the tiktok action → a STORYBOARD asset: kind "storyboard", title = concept, body = numbered shots + Caption.
+    expect(vidDraft.kind).toBe("storyboard");
+    const vidAsset = await prisma.asset.findFirst({ where: { routeActionId: actionByChannel["tiktok"] } });
+    expect(vidAsset!.kind).toBe("storyboard");
+    const vidContent = JSON.parse(vidAsset!.contentJson) as { title: string; body: string };
+    expect(vidContent.title).toBe("The hook");
+    expect(vidContent.body).toContain("1. [");
+    expect(vidContent.body).toContain("Caption:");
+
+    // (b) the x action → the existing copywriter shape (kind "post", the model's body).
+    expect(copyDraft.kind).toBe("post");
+    const copyAsset = await prisma.asset.findFirst({ where: { routeActionId: actionByChannel["x"] } });
+    expect(copyAsset!.kind).toBe("post");
+    expect(JSON.parse(copyAsset!.contentJson).body).toBe("Draft copy body");
+
+    // (c) the routers never cross: the videographer marker is in the tiktok call ONLY; "Action: draft" in the x call ONLY.
+    const vidCall = captured.find((i) => i.includes('storyboard a short-form video for the "tiktok" channel'));
+    const copyCall = captured.find((i) => i.includes('Action: draft a post for the "x" channel'));
+    expect(vidCall).toBeDefined();
+    expect(copyCall).toBeDefined();
+    expect(vidCall).not.toContain("Action: draft");
+    expect(copyCall).not.toContain("storyboard a short-form video");
+  });
+
+  it('CASE-INSENSITIVE — features channel "TikTok" still routes to the videographer', async () => {
+    const VID = "biz_draft_video_case";
+    const { wpId, actionByChannel } = await seedWaypoint(VID, ["TikTok"]);
+    const captured: string[] = [];
+    const res = await draftWaypoint({ businessId: VID }, { waypointId: wpId }, { harness: videoHarness(captured), models: { brain: "fake" } });
+    expect(res.drafts).toHaveLength(1);
+    expect(res.drafts[0].kind).toBe("storyboard");
+    const asset = await prisma.asset.findFirst({ where: { routeActionId: actionByChannel["TikTok"] } });
+    expect(asset!.kind).toBe("storyboard");
+    // the instruction keeps the ORIGINAL channel label (safeLabel does not lowercase).
+    expect(captured.some((i) => i.includes('storyboard a short-form video for the "TikTok" channel'))).toBe(true);
+  });
+
+  it("TRUNCATE — a 7-scene storyboard persists exactly 6 numbered lines (first-6, no 7th)", async () => {
+    const VID = "biz_draft_video_truncate";
+    const { wpId, actionByChannel } = await seedWaypoint(VID, ["reels"]);
+    const captured: string[] = [];
+    await draftWaypoint({ businessId: VID }, { waypointId: wpId }, { harness: videoHarness(captured, 7), models: { brain: "fake" } });
+    const asset = await prisma.asset.findFirst({ where: { routeActionId: actionByChannel["reels"] } });
+    const body = JSON.parse(asset!.contentJson).body as string;
+    expect(body).toContain("1. [");
+    expect(body).toContain("6. [");
+    expect(body).not.toContain("7. ["); // the 7th scene was truncated, never persisted
+  });
+
+  it("NO video actions — a text-only waypoint makes ZERO videographer calls", async () => {
+    const VID = "biz_draft_video_none";
+    const { wpId } = await seedWaypoint(VID, ["x", "hackernews"]);
+    const captured: string[] = [];
+    const res = await draftWaypoint({ businessId: VID }, { waypointId: wpId }, { harness: videoHarness(captured), models: { brain: "fake" } });
+    expect(res.drafts).toHaveLength(2);
+    expect(res.drafts.every((d) => d.kind === "post")).toBe(true);
+    expect(captured.some((i) => i.includes("storyboard a short-form video"))).toBe(false);
+    expect(captured.some((i) => i.includes("Action: draft"))).toBe(true); // the copywriter probe still fires
+  });
+});
