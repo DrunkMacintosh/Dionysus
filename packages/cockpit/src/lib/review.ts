@@ -382,6 +382,48 @@ export async function listPitchRequests(identity: Identity): Promise<PitchReques
   return cards;
 }
 
+// ---------------------------------------------------------------------------
+// Nightly activity read (Stage 6j) — the founder's "while you slept" view behind
+// the "/activity" page. Renders the persisted nightly diary VERBATIM: a failed
+// section shows its real reason, a skipped one its real skip reason — nothing is
+// renamed, summarized, or softened between runNightly and the founder's screen
+// (§16 accountability; D31 liveness). Known sections render in SECTION_ORDER, any
+// unknown key after; a malformed sectionsJson row is SKIPPED (defensive — only our
+// own writer produces these rows, the parsed-null lesson taken to skip). Newest
+// night first. Identity is a PARAMETER (the page passes session.businessId) and is
+// the ONLY businessId in play — another tenant's diary is impossible to reach.
+// NOT an MCP tool (the whitelist stays 11).
+// ---------------------------------------------------------------------------
+const SECTION_ORDER = ["plan", "radar", "metrics", "learn", "strategy", "cro", "seo", "outreach", "drafts"];
+
+export type ActivitySection = { section: string; status: "ok" | "skipped" | "failed"; text: string };
+export type ActivityRun = { runId: string; ranAt: Date; sections: ActivitySection[] };
+
+export async function listNightlyActivity(identity: { businessId: string }, limit = 14): Promise<ActivityRun[]> {
+  const rows = await prisma.nightlyRun.findMany({
+    where: { businessId: identity.businessId }, orderBy: { ranAt: "desc" }, take: limit });
+  const runs: ActivityRun[] = [];
+  for (const row of rows) {
+    let parsed: Record<string, { status?: unknown; detail?: unknown; reason?: unknown }>;
+    try {
+      parsed = JSON.parse(row.sectionsJson) as typeof parsed;
+      if (typeof parsed !== "object" || parsed === null) continue;
+    } catch {
+      continue; // malformed diary row → skip, never crash the list
+    }
+    const keys = [...SECTION_ORDER.filter((k) => k in parsed), ...Object.keys(parsed).filter((k) => !SECTION_ORDER.includes(k))];
+    const sections: ActivitySection[] = [];
+    for (const key of keys) {
+      const s = parsed[key];
+      if (typeof s?.status !== "string" || !["ok", "skipped", "failed"].includes(s.status)) continue;
+      const text = typeof s.detail === "string" ? s.detail : typeof s.reason === "string" ? s.reason : "";
+      sections.push({ section: key, status: s.status as "ok" | "skipped" | "failed", text });
+    }
+    if (sections.length > 0) runs.push({ runId: row.id, ranAt: row.ranAt, sections });
+  }
+  return runs;
+}
+
 export type DigestHeader = { digestId: string; date: string; itemCount: number; reviewedAt: Date | null; openCount: number };
 
 export async function getDigestHeader(identity: Identity): Promise<DigestHeader> {

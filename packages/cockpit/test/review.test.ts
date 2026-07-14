@@ -5,7 +5,7 @@ import { recordSimulation } from "dionysus-mcp/tools/simulation";
 import { recordObservation } from "dionysus-mcp/tools/memory";
 import { createObjective, persistRoute, persistWaypoint, upsertRouteAction } from "dionysus-mcp/tools/plan";
 import { approveAction, startExecution, completeExecution } from "dionysus-mcp/tools/lifecycle";
-import { listProposedDrafts, getRouteOverview, getDigestHeader, listSendQueue, listExecuted, isRenderableHttpUrl, listRadarObservations, getCmoReport, getTimeline, getCraftBeliefs, getIntegrations, getRoutePendingRevision, getActiveObjective, listPitchRequests } from "../src/lib/review";
+import { listProposedDrafts, getRouteOverview, getDigestHeader, listSendQueue, listExecuted, isRenderableHttpUrl, listRadarObservations, getCmoReport, getTimeline, getCraftBeliefs, getIntegrations, getRoutePendingRevision, getActiveObjective, listPitchRequests, listNightlyActivity } from "../src/lib/review";
 import { persistCraftBelief } from "dionysus-mcp/tools/belief-graph";
 import { connectIntegration } from "dionysus-mcp/tools/integration";
 import { proposeRouteRevision } from "dionysus-mcp/tools/route-revision";
@@ -895,5 +895,92 @@ describe("listPitchRequests (the /pitch read)", () => {
     expect(requests).toHaveLength(1);
     expect(requests[0]!.targetName).toBe("Their target");
     expect(requests.some((r) => r.actionId === draftedId || r.actionId === undraftedId)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Nightly activity service (Stage 6j) — the read behind the "/activity" ("While
+// you slept") page. listNightlyActivity renders the persisted nightly diary
+// VERBATIM: each night's section results exactly as runNightly returned them,
+// including SKIPS and FAILURES with their real reasons (nothing softened or
+// ok-washed). Known sections render in SECTION_ORDER, unknown keys after; a
+// malformed sectionsJson row is SKIPPED (defensive — only our own writer produces
+// these rows); newest night first; identity-scoped (another tenant's diary never
+// leaks — businessId comes from the identity param / session only, D27.1).
+// ---------------------------------------------------------------------------
+const ACT = { businessId: "biz_cockpit_activity" };
+const ACTO = { businessId: "biz_cockpit_activity_other" };
+
+describe("listNightlyActivity (the /activity read)", () => {
+  let olderId = "";
+  let newerId = "";
+  let malformedId = "";
+
+  beforeAll(async () => {
+    for (const id of [ACT.businessId, ACTO.businessId]) {
+      await prisma.nightlyRun.deleteMany({ where: { businessId: id } });
+      await prisma.business.upsert({ where: { id }, create: { id, name: id }, update: {} });
+    }
+    // Older night (EARLIER ranAt): two ok sections.
+    olderId = (await prisma.nightlyRun.create({ data: { businessId: ACT.businessId,
+      ranAt: new Date("2026-07-10T00:00:00.000Z"),
+      sectionsJson: JSON.stringify({ plan: { status: "ok", detail: "planned" }, radar: { status: "ok", detail: "scanned" } }) } })).id;
+
+    // A MALFORMED row with a ranAt BETWEEN the two valid nights: must be SKIPPED, never
+    // crash — and its mid-list ranAt makes the skip non-vacuous (were it not skipped it
+    // would appear between newer and older).
+    malformedId = (await prisma.nightlyRun.create({ data: { businessId: ACT.businessId,
+      ranAt: new Date("2026-07-11T00:00:00.000Z"), sectionsJson: "{not valid json" } })).id;
+
+    // Newer night (LATEST ranAt): keys inserted OUT of SECTION_ORDER (drafts, plan,
+    // mystery) — the read must reorder known keys to SECTION_ORDER and place the unknown
+    // "mystery" key AFTER them. drafts genuinely FAILED; its real reason must surface verbatim.
+    newerId = (await prisma.nightlyRun.create({ data: { businessId: ACT.businessId,
+      ranAt: new Date("2026-07-12T00:00:00.000Z"),
+      sectionsJson: JSON.stringify({
+        drafts: { status: "failed", reason: "budget cap 0 blocked drafts" },
+        plan: { status: "ok", detail: "planned tonight" },
+        mystery: { status: "skipped", reason: "unknown section" },
+      }) } })).id;
+
+    // ACTO: its OWN night — proves ACT's diary never leaks into ACTO's read (non-vacuous scope).
+    await prisma.nightlyRun.create({ data: { businessId: ACTO.businessId,
+      ranAt: new Date("2026-07-12T00:00:00.000Z"),
+      sectionsJson: JSON.stringify({ plan: { status: "ok", detail: "their plan" } }) } });
+  });
+
+  it("renders recorded nights newest-first, sections in SECTION_ORDER, a failed section's real reason verbatim", async () => {
+    const runs = await listNightlyActivity(ACT);
+    expect(runs).toHaveLength(2); // the malformed row is skipped, not counted
+
+    // Newest-first: the 07-12 night leads, the 07-10 night trails.
+    expect(runs[0]!.runId).toBe(newerId);
+    expect(runs[1]!.runId).toBe(olderId);
+    expect(runs[0]!.ranAt).toBeInstanceOf(Date);
+
+    // Known keys reordered to SECTION_ORDER (plan before drafts), unknown "mystery" AFTER.
+    expect(runs[0]!.sections.map((s) => s.section)).toEqual(["plan", "drafts", "mystery"]);
+
+    // The failed section surfaces its REAL reason verbatim — no softening, no ok-washing.
+    const drafts = runs[0]!.sections.find((s) => s.section === "drafts")!;
+    expect(drafts.status).toBe("failed");
+    expect(drafts.text).toBe("budget cap 0 blocked drafts");
+
+    const plan = runs[0]!.sections.find((s) => s.section === "plan")!;
+    expect(plan).toMatchObject({ status: "ok", text: "planned tonight" });
+  });
+
+  it("skips a malformed sectionsJson row while a valid sibling still renders", async () => {
+    const runs = await listNightlyActivity(ACT);
+    expect(runs.map((r) => r.runId)).not.toContain(malformedId); // un-parseable row omitted
+    expect(runs.map((r) => r.runId)).toContain(olderId);         // valid sibling still renders
+    expect(runs.every((r) => r.sections.length > 0)).toBe(true); // no empty-section run surfaces
+  });
+
+  it("is identity-scoped — another tenant's nights never leak", async () => {
+    const runs = await listNightlyActivity(ACTO);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.sections[0]).toMatchObject({ section: "plan", status: "ok", text: "their plan" });
+    expect(runs.some((r) => r.runId === newerId || r.runId === olderId)).toBe(false);
   });
 });
