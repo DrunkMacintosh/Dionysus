@@ -31,6 +31,7 @@ model Business {
   integrations    Integration[]
   metricSnapshots MetricSnapshot[]
   routeRevisions  RouteRevision[]
+  nightlyRuns     NightlyRun[]
 }
 
 model Product {
@@ -308,4 +309,14 @@ model RouteRevision {
   decidedAt    DateTime?
 
   @@index([businessId])
+}
+
+model NightlyRun {
+  id           String   @id @default(cuid())
+  businessId   String
+  business     Business @relation(fields: [businessId], references: [id])
+  sectionsJson String   // JSON.stringify of the night's section map — VERBATIM, incl. skips/failures
+  ranAt        DateTime @default(now())
+
+  @@index([businessId, ranAt])
 }
