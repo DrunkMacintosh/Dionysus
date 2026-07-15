@@ -1,6 +1,7 @@
 import { requireSession } from "../../lib/auth";
 import { getIntegrations } from "../../lib/review";
-import { ConnectForm } from "./connect-form";
+import { getConnectedVideoSource } from "dionysus-mcp/tools/integration";
+import { ConnectForm, ConnectVideoForm } from "./connect-form";
 
 export const dynamic = "force-dynamic";
 
@@ -8,6 +9,7 @@ export default async function ConnectPage() {
   const session = await requireSession();
   const integrations = await getIntegrations({ businessId: session.businessId });
   const analytics = integrations.filter((i) => i.kind === "analytics" && i.status === "connected");
+  const video = await getConnectedVideoSource({ businessId: session.businessId }); // config-free view
   return (
     <main>
       <h2>Connect analytics</h2>
@@ -24,6 +26,21 @@ export default async function ConnectPage() {
         <p>No analytics connected yet.</p>
       )}
       <ConnectForm />
+
+      <h2 style={{ marginTop: 32 }}>Video generation</h2>
+      <p style={{ color: "#666" }}>
+        Generates video drafts from storyboards you approve. Every video is a draft you review before posting.
+        The reference provider is transport-injectable — the real Kling adapter arrives with your API key.
+        Your API key is encrypted at rest and never shown again.
+      </p>
+      {video ? (
+        <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 12, marginBottom: 16 }}>
+          <strong>Connected:</strong> {video.provider} · {video.metric}
+        </div>
+      ) : (
+        <p>No video source connected yet.</p>
+      )}
+      <ConnectVideoForm />
     </main>
   );
 }

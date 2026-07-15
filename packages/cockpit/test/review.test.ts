@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { prisma } from "dionysus-mcp/db";
 import { persistAsset, setActionAsset } from "dionysus-mcp/tools/asset";
 import { recordSimulation } from "dionysus-mcp/tools/simulation";
@@ -7,11 +7,23 @@ import { createObjective, persistRoute, persistWaypoint, upsertRouteAction } fro
 import { approveAction, startExecution, completeExecution } from "dionysus-mcp/tools/lifecycle";
 import { listProposedDrafts, getRouteOverview, getDigestHeader, listSendQueue, listExecuted, isRenderableHttpUrl, listRadarObservations, getCmoReport, getTimeline, getCraftBeliefs, getIntegrations, getRoutePendingRevision, getActiveObjective, listPitchRequests, listNightlyActivity } from "../src/lib/review";
 import { persistCraftBelief } from "dionysus-mcp/tools/belief-graph";
-import { connectIntegration } from "dionysus-mcp/tools/integration";
+import { connectIntegration, getConnectedVideoSource } from "dionysus-mcp/tools/integration";
+import { connectVideoSourceAction } from "../src/lib/integration-actions";
 import { proposeRouteRevision } from "dionysus-mcp/tools/route-revision";
 import { decideRouteRevision } from "dionysus-mcp/tools/decide-revision";
 import { mirrorPlanToGraph } from "dionysus-mcp/tools/memory-graph";
 import { CONFIG_KEY_ENV } from "dionysus-mcp/lib/secret-box";
+
+// The /connect server action reads the signed session (requireSession) and calls
+// revalidatePath — both are request-scoped Next primitives. For the connect-action
+// tests we stub them: requireSession yields a fixed tenant, revalidatePath is inert.
+// review.ts (and every other read under test) takes identity as a param and never
+// touches auth or next/cache, so these file-scoped mocks are inert for them.
+const AUTH_MOCK = vi.hoisted(() => ({ businessId: "biz_cockpit_vidconnect" }));
+vi.mock("../src/lib/auth", () => ({
+  requireSession: async () => ({ businessId: AUTH_MOCK.businessId, email: "founder@example.com", exp: 0 }),
+}));
+vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
 
 const A = { businessId: "biz_cockpit_rev" };
 const B = { businessId: "biz_cockpit_rev_other" };
@@ -1048,5 +1060,64 @@ describe("listNightlyActivity (the /activity read)", () => {
     expect(runs).toHaveLength(1);
     expect(runs[0]!.sections[0]).toMatchObject({ section: "plan", status: "ok", text: "their plan" });
     expect(runs.some((r) => r.runId === newerId || r.runId === olderId)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// connectVideoSourceAction (Stage 6k) — the /connect video-generation form's
+// server action. Mirrors connectAnalyticsAction: requireSession OUTSIDE try,
+// session businessId only, and TWO honest gates BEFORE any write (the endpoint
+// must be http(s) AND the apiKey must be non-empty), then connectIntegration
+// kind "video" provider "http-json" metric "video-generation". The apiKey is
+// encrypted at rest (configEnc) and NEVER surfaces in any read view — the form
+// input is write-only, the config-free view is all a reader ever sees.
+// ---------------------------------------------------------------------------
+const VIDCONN = { businessId: AUTH_MOCK.businessId };
+const VIDEO_ENDPOINT = "https://kling.example/generate";
+const VIDEO_API_KEY = "sk-video-plaintext-secret";
+
+const videoForm = (fields: Record<string, string>): FormData => {
+  const fd = new FormData();
+  for (const [k, v] of Object.entries(fields)) fd.set(k, v);
+  return fd;
+};
+
+describe("connectVideoSourceAction (/connect video form)", () => {
+  beforeAll(async () => {
+    process.env[CONFIG_KEY_ENV] = Buffer.from("0123456789abcdef0123456789abcdef").toString("base64");
+    await prisma.business.upsert({ where: { id: VIDCONN.businessId }, create: { id: VIDCONN.businessId, name: VIDCONN.businessId }, update: {} });
+  });
+  beforeEach(async () => { await prisma.integration.deleteMany({ where: { businessId: VIDCONN.businessId } }); });
+
+  it("happy connect writes ONE encrypted video integration; the read view is config-free", async () => {
+    const res = await connectVideoSourceAction(null, videoForm({ endpoint: VIDEO_ENDPOINT, apiKey: VIDEO_API_KEY }));
+    expect(res.ok).toBe(true);
+
+    const rows = await prisma.integration.findMany({ where: { businessId: VIDCONN.businessId } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ kind: "video", provider: "http-json", metric: "video-generation", status: "connected" });
+    // The config is AES-256-GCM encrypted at rest — the plaintext apiKey is never in configEnc.
+    expect(rows[0]!.configEnc).not.toContain(VIDEO_API_KEY);
+
+    // The read view (getConnectedVideoSource, config-free) carries no config field.
+    const view = await getConnectedVideoSource(VIDCONN);
+    expect(view).not.toBeNull();
+    expect(view!.kind).toBe("video");
+    expect(view).not.toHaveProperty("configEnc");
+    expect(view).not.toHaveProperty("config");
+  });
+
+  it("refuses a non-http(s) endpoint BEFORE any write (zero rows)", async () => {
+    const res = await connectVideoSourceAction(null, videoForm({ endpoint: "javascript:alert(1)", apiKey: VIDEO_API_KEY }));
+    expect(res.ok).toBe(false);
+    expect(await prisma.integration.count({ where: { businessId: VIDCONN.businessId } })).toBe(0);
+  });
+
+  it("never surfaces the apiKey plaintext in any read surface (view or list)", async () => {
+    await connectVideoSourceAction(null, videoForm({ endpoint: VIDEO_ENDPOINT, apiKey: VIDEO_API_KEY }));
+    const view = await getConnectedVideoSource(VIDCONN);
+    const list = await getIntegrations(VIDCONN);
+    expect(JSON.stringify(view)).not.toContain(VIDEO_API_KEY);
+    expect(JSON.stringify(list)).not.toContain(VIDEO_API_KEY);
   });
 });
