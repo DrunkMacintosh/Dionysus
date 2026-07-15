@@ -12,6 +12,10 @@ export type AgentDef = {
   model: string; // e.g. "nvidia/nemotron-3-super-120b-a12b"
   instructions: string; // assembled prompt text
   tools: ToolDef[];
+  // Per-agent override of the harness's tool-turn safety bound. Omitted for
+  // ordinary agents (they use the default guard); raised only for research
+  // agents whose legitimate work is many search/fetch turns.
+  maxToolTurns?: number;
 };
 
 export type AgentRunResult = { finalOutput: string };

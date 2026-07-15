@@ -71,3 +71,84 @@ describe("sdk harness (against a mock OpenAI-compatible server)", () => {
     expect(out).toContain("FINAL: pong"); // mock returns the same final shape
   });
 });
+
+// The tool-turn guard, and its per-agent override. A misbehaving (or merely
+// deliberate — the historian is a research agent) model that keeps issuing tool
+// calls must not loop forever; the loop runs at most `maxTurns` iterations
+// (== HTTP requests here, one create() per turn) and then throws. `maxToolTurns`
+// on the AgentDef raises that ceiling for research agents; every other def keeps
+// the default 8.
+describe("sdk harness tool-turn guard", () => {
+  const toolCall = (i: number) => ({
+    id: String(i), object: "chat.completion", created: 0, model: "m",
+    choices: [{ index: 0, finish_reason: "tool_calls", message: {
+      role: "assistant", content: null,
+      tool_calls: [{ id: `t${i}`, type: "function", function: { name: "loop_tool", arguments: "{}" } }],
+    }}],
+  });
+  const final = (i: number, content: string) => ({
+    id: String(i), object: "chat.completion", created: 0, model: "m",
+    choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content } }],
+  });
+
+  async function withServer(
+    respond: (callIndex: number) => Record<string, unknown>,
+    run: (ctx: { url: string; count: () => number }) => Promise<void>,
+  ): Promise<void> {
+    let n = 0;
+    const srv = http.createServer(async (req, res) => {
+      for await (const _ of req) void _;
+      n += 1;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(respond(n)));
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    const port = (srv.address() as { port: number }).port;
+    try {
+      await run({ url: `http://127.0.0.1:${port}/v1`, count: () => n });
+    } finally {
+      srv.close();
+    }
+  }
+
+  const looperDef = (extra: Partial<AgentDef> = {}): AgentDef => ({
+    name: "looper", model: "mock-model", instructions: "loop forever",
+    tools: [{
+      name: "loop_tool", description: "always callable",
+      parameters: z.object({}),
+      execute: async () => JSON.stringify({ ok: true }),
+    }],
+    ...extra,
+  });
+
+  it("a def WITHOUT maxToolTurns throws after exactly 8 turns (default guard preserved)", async () => {
+    await withServer(toolCall, async ({ url, count }) => {
+      const harness = createSdkHarness({ baseUrl: url, apiKey: "k" });
+      await expect(harness.runAgent(looperDef(), "go")).rejects.toThrow(
+        /exceeded 8 tool turns/,
+      );
+      expect(count()).toBe(8);
+    });
+  });
+
+  it("a def WITH maxToolTurns:3 that loops forever throws after exactly 3 turns", async () => {
+    await withServer(toolCall, async ({ url, count }) => {
+      const harness = createSdkHarness({ baseUrl: url, apiKey: "k" });
+      await expect(
+        harness.runAgent(looperDef({ maxToolTurns: 3 }), "go"),
+      ).rejects.toThrow(/exceeded 3 tool turns/);
+      expect(count()).toBe(3);
+    });
+  });
+
+  it("a def WITH maxToolTurns:3 that finals on turn 3 succeeds", async () => {
+    // Turns 1 and 2 are tool calls; turn 3 returns a final within the raised ceiling.
+    const respond = (i: number) => (i < 3 ? toolCall(i) : final(i, "DONE-ON-3"));
+    await withServer(respond, async ({ url, count }) => {
+      const harness = createSdkHarness({ baseUrl: url, apiKey: "k" });
+      const result = await harness.runAgent(looperDef({ maxToolTurns: 3 }), "go");
+      expect(result.finalOutput).toBe("DONE-ON-3");
+      expect(count()).toBe(3);
+    });
+  });
+});

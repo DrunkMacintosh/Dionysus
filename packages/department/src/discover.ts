@@ -109,6 +109,9 @@ export async function discover(
     model: deps.models.brain,
     instructions: `${loadPrompt("reasoning-standard")}\n\n${loadPrompt("historian")}`,
     tools,
+    // Research agent — search + multi-page fetch legitimately exceeds the default
+    // 8-turn guard; execution-discovered against the live model (z-ai/glm-5.2).
+    maxToolTurns: 16,
   };
   const rawHistorian = await deps.harness.runAgent(historianDef, `Target product:\n${fencedProduct}`);
   const historian = await parseWithRetry(

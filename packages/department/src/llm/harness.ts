@@ -97,7 +97,12 @@ export function createSdkHarness(opts: { baseUrl: string; apiKey: string }): Har
         { role: "user", content: input },
       ];
 
-      for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
+      // Per-agent override of the safety bound: research agents (the historian
+      // searches then fetches several pages then searches again) legitimately
+      // exceed the default. Everyone else keeps MAX_TOOL_TURNS.
+      const maxTurns = def.maxToolTurns ?? MAX_TOOL_TURNS;
+
+      for (let turn = 0; turn < maxTurns; turn++) {
         const res = await client.chat.completions.create({
           model: def.model,
           messages,
@@ -132,7 +137,7 @@ export function createSdkHarness(opts: { baseUrl: string; apiKey: string }): Har
       }
 
       throw new Error(
-        `harness.runAgent: exceeded ${MAX_TOOL_TURNS} tool turns without a final message`,
+        `harness.runAgent: exceeded ${maxTurns} tool turns without a final message`,
       );
     },
 
