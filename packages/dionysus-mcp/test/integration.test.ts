@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import { prisma } from "../src/db.js";
 import { CONFIG_KEY_ENV } from "../src/lib/secret-box.js";
-import { connectIntegration, disconnectIntegration, getConnectedAnalytics, getDecryptedConfig, listIntegrations } from "../src/tools/integration.js";
+import { connectIntegration, disconnectIntegration, getConnectedAnalytics, getConnectedVideoSource, getDecryptedConfig, listIntegrations } from "../src/tools/integration.js";
 
 const BIZ = "biz_integ_a";
 const OTHER = "biz_integ_b";
@@ -59,5 +59,44 @@ describe("integration", () => {
     expect(await getDecryptedConfig({ businessId: OTHER }, integrationId)).toBeNull();
     await disconnectIntegration({ businessId: OTHER }, { integrationId }); // no-op cross-tenant
     expect((await getConnectedAnalytics({ businessId: BIZ }))?.status).toBe("connected");
+  });
+});
+
+describe("getConnectedVideoSource", () => {
+  it("returns the connected video source WITHOUT config; null when disconnected", async () => {
+    const { integrationId } = await connectIntegration({ businessId: BIZ }, {
+      kind: "video", provider: "http-json", metric: "video-generation",
+      config: { endpoint: "https://kling.example/api", apiKey: "sekret-video-key" } });
+    const connected = await getConnectedVideoSource({ businessId: BIZ });
+    expect(connected?.kind).toBe("video");
+    expect(connected?.metric).toBe("video-generation");
+    expect(connected?.status).toBe("connected");
+    expect(connected).not.toHaveProperty("configEnc");
+    expect(connected).not.toHaveProperty("config");
+
+    await disconnectIntegration({ businessId: BIZ }, { integrationId });
+    expect(await getConnectedVideoSource({ businessId: BIZ })).toBeNull();
+  });
+
+  it("returns null when no video source has ever been connected", async () => {
+    expect(await getConnectedVideoSource({ businessId: BIZ })).toBeNull();
+  });
+
+  it("is kind-isolated — a connected ANALYTICS row does not satisfy a VIDEO lookup", async () => {
+    await connectIntegration({ businessId: BIZ }, {
+      kind: "analytics", provider: "http-json", metric: "signups", config: { apiKey: "k" } });
+    expect(await getConnectedVideoSource({ businessId: BIZ })).toBeNull();
+    // and a video source is not returned by the analytics lookup either
+    await connectIntegration({ businessId: BIZ }, {
+      kind: "video", provider: "http-json", metric: "video-generation", config: { apiKey: "k" } });
+    expect((await getConnectedAnalytics({ businessId: BIZ }))?.kind).toBe("analytics");
+    expect((await getConnectedVideoSource({ businessId: BIZ }))?.kind).toBe("video");
+  });
+
+  it("is scoped — another tenant cannot read this video source", async () => {
+    await connectIntegration({ businessId: BIZ }, {
+      kind: "video", provider: "http-json", metric: "video-generation", config: { apiKey: "k" } });
+    expect(await getConnectedVideoSource({ businessId: OTHER })).toBeNull();
+    expect((await getConnectedVideoSource({ businessId: BIZ }))?.status).toBe("connected");
   });
 });

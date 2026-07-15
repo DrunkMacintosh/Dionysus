@@ -46,6 +46,14 @@ export async function getConnectedAnalytics(identity: Identity): Promise<Connect
   return row ? toView(row) : null;
 }
 
+/** The connected video-generation source (6k), or null. Mirrors getConnectedAnalytics. */
+export async function getConnectedVideoSource(identity: Identity): Promise<ConnectedIntegration | null> {
+  const row = await prisma.integration.findFirst({
+    where: { businessId: identity.businessId, kind: "video", status: "connected" },
+    orderBy: { createdAt: "desc" } });
+  return row ? toView(row) : null;
+}
+
 /** Decrypt the config for ingestion (scoped). Null if not found in scope or on a decrypt failure. */
 export async function getDecryptedConfig(identity: Identity, integrationId: string): Promise<IntegrationConfig | null> {
   const row = await prisma.integration.findFirst({ where: { id: integrationId, businessId: identity.businessId } });
