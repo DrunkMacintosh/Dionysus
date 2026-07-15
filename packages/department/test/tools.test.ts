@@ -28,7 +28,7 @@ describe("webSearch (Tavily, injectable transport)", () => {
     delete process.env["TAVILY_API_KEY"];
     try {
       await expect(webSearch("q", { transport: async () => ({ status: 200, body: "{}" }) }))
-        .rejects.toThrow(/TAVILY_API_KEY/);
+        .rejects.toThrow("TAVILY_API_KEY is not set — web_search is unavailable (fail closed).");
     } finally {
       if (saved !== undefined) process.env["TAVILY_API_KEY"] = saved;
     }

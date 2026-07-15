@@ -201,4 +201,24 @@ describe("runSeo (fresh deterministic audit -> page-change dedup -> never-auto c
     expect(third.status).toBe("ok");
     expect(await seoActionCount(BIZ)).toBe(2);
   });
+
+  it("DEDUP FAIL-OPEN: a latest seo-audit asset with malformed contentJson can't be compared → a fresh audit drafts", async () => {
+    mode = "healthy"; currentTitle = "SEO Audit Test Landing Page";
+    const BIZ = "biz_seo_malformed";
+    const wpId = await seedTenant(BIZ);
+    // A prior seo-audit whose stored asset content is NOT valid JSON (a corrupt/partial write).
+    // It is REJECTED (not proposed) so ONE-STANDING doesn't fire and the DEDUP path is the one
+    // exercised — but JSON.parse throws inside step 5, so the stored hash can't gate. The malformed
+    // branch must fail-open (a fresh audit of the current page is never a fabrication), not wedge.
+    const prior = await prisma.routeAction.create({ data: { businessId: BIZ, waypointId: wpId, employeeRole: "seo", type: "seo-audit", status: "rejected", featuresJson: JSON.stringify({ channel: "seo", seo: true }) } });
+    const asset = await prisma.asset.create({ data: { businessId: BIZ, routeActionId: prior.id, channel: "seo", kind: "seo-audit", contentJson: "not json" } });
+    await prisma.routeAction.update({ where: { id: prior.id }, data: { assetId: asset.id } });
+
+    const res = await runSeo({ businessId: BIZ }, deps);
+    expect(res.status).toBe("ok"); // fail-open: the unparseable hash did not block a fresh audit
+    // The rejected prior + the newly drafted audit → 2 seo-audit actions; exactly the fresh one is proposed+bound.
+    expect(await seoActionCount(BIZ)).toBe(2);
+    const proposedWithAsset = await prisma.routeAction.count({ where: { businessId: BIZ, type: "seo-audit", status: "proposed", assetId: { not: null } } });
+    expect(proposedWithAsset).toBe(1);
+  });
 });

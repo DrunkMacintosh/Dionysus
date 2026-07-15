@@ -56,6 +56,7 @@ const noMetric: MetricTransport = async () => ({ ok: false, status: 503, json: a
 const fullDeps = () => ({ harness: goodHarness(), models: { brain: "fake" }, hnTransport, metricTransport: noMetric });
 
 async function wipe(businessId: string) {
+  await prisma.nightlyRun.deleteMany({ where: { businessId } }); // 6j: the diary the full nightly writes — cleared for sibling-eval teardown parity
   await prisma.memoryEdge.deleteMany({ where: { businessId } });
   await prisma.memoryNode.deleteMany({ where: { businessId } });
   await prisma.metricSnapshot.deleteMany({ where: { businessId } });

@@ -927,14 +927,18 @@ describe("listPitchRequests (the /pitch read)", () => {
     const route = await prisma.route.create({ data: { businessId: PITCH.businessId, objectiveId: obj.id, source: "case", status: "active" } });
     const wp = await prisma.routeWaypoint.create({ data: { businessId: PITCH.businessId, routeId: route.id, order: 1, title: "Launch", goal: "go live", status: "active" } });
 
-    // An undrafted pitch request (created FIRST → older createdAt).
+    // An undrafted pitch request (the OLDER createdAt).
     undraftedId = (await upsertRouteAction(PITCH, { waypointId: wp.id, employeeRole: "outreach", type: "outreach-pitch", rationale: "Pitch Newsletter A (founder-requested)", features: { channel: "outreach-email", outreach: true, targetUrl: "https://newsletter-a.example.com", targetName: "Newsletter A" } })).actionId;
-    await new Promise((r) => setTimeout(r, 5)); // strictly later createdAt so newest-first is deterministic
 
-    // A DRAFTED pitch request (created SECOND → newer) with a bound asset — `drafted` must flip true.
+    // A DRAFTED pitch request (the NEWER createdAt) with a bound asset — `drafted` must flip true.
     draftedId = (await upsertRouteAction(PITCH, { waypointId: wp.id, employeeRole: "outreach", type: "outreach-pitch", rationale: "Pitch Podcast B (founder-requested)", features: { channel: "outreach-email", outreach: true, targetUrl: "https://podcast-b.example.com", targetName: "Podcast B" } })).actionId;
     const { assetId } = await persistAsset(PITCH, { channel: "outreach-email", kind: "outreach-pitch", content: { title: "Hi there", body: "a grounded pitch body" }, routeActionId: draftedId });
     await setActionAsset(PITCH, draftedId, assetId);
+
+    // Stamp explicit distinct createdAt so newest-first ordering is deterministic (no timing race):
+    // the drafted request is strictly newer, so it must lead the list.
+    await prisma.routeAction.update({ where: { id: undraftedId }, data: { createdAt: new Date("2026-07-01T00:00:00.000Z") } });
+    await prisma.routeAction.update({ where: { id: draftedId }, data: { createdAt: new Date("2026-07-02T00:00:00.000Z") } });
 
     // A MALFORMED-features row — must be SKIPPED (parsed defensively), never crash the list.
     await prisma.routeAction.create({ data: { businessId: PITCH.businessId, waypointId: wp.id, employeeRole: "outreach", type: "outreach-pitch", status: "proposed", featuresJson: "{not valid json" } });
