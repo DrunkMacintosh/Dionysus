@@ -165,9 +165,11 @@ node packages/cockpit/scripts/issue-login-link.mjs dogfood-co founder@example.co
 ## 6. The nightly on a schedule
 
 The nightly sweep (`pnpm --filter department nightly`) wakes every business for one unattended
-routine — radar → metrics → learn → strategy → drafts — each section best-effort and
-per-business isolated. Per-section failures are **reported, not fatal**: the sweep prints a JSON
-report and **exits 0**.
+routine of **ten sections** — plan → radar → metrics → learn → strategy → cro → seo → outreach →
+video → drafts — each section best-effort and per-business isolated. Per-section failures are
+**reported, not fatal**: the sweep prints a JSON report and **exits 0**. Every night also writes
+its **verbatim activity diary** (a `NightlyRun` row — including skips and failures with their real
+reasons); the founder reads it on the cockpit's `/activity` page ("While you slept").
 
 Save this wrapper as `D:\Dionysus\scripts\run-nightly.ps1`. It sets the env, runs the sweep, and
 appends stdout+stderr to a dated log. It uses **cmd-level redirection** (`cmd /c "... >> log 2>&1"`)
@@ -253,24 +255,51 @@ pnpm -F department smoke        # node scripts/live-smoke.mjs — needs a workin
 (A cockpit discovery button and founder case-picking are future work; the nightly takes the
 top-ranked case.)
 
+**The full cockpit surface** (everything session-authed, everything draft-only/never-auto):
+
+| Page | What the founder does there |
+|------|------------------------------|
+| `/setup` | State the objective — the next nightly bootstraps the first route |
+| `/` | Progress home |
+| `/route` | The plan + founder-gated route revisions |
+| `/drafts` | Review/edit/approve every draft (posts, cro-fixes, seo audits, pitches, storyboards, generated videos) |
+| `/send` | The verified-send queue (copy, post by hand, paste the live URL) |
+| `/pitch` | Name an outreach target — the nightly drafts a page-grounded pitch |
+| `/connect` | Connect a read-only analytics source and/or a video-generation source (keys encrypted, write-only) |
+| `/report` | The weekly CMO report — measured verdicts, honest gaps |
+| `/learned` | Craft + performance beliefs (labeled hypotheses, never metrics) |
+| `/radar` | What the market radar noticed overnight |
+| `/timeline` | The plan's evolution graph |
+| `/activity` | "While you slept" — every night's verbatim diary |
+
 ---
 
 ## 9. What still needs the founder (honest next-steps)
 
 These are deliberately **not** automated here — they need a real account, key, or hosting decision:
 
-- **GitHub push** — the `DrunkMacintosh` remote needs re-auth before the branch can be pushed.
 - **A real model-provider key** for `GATEWAY_UPSTREAM_URL` / `GATEWAY_UPSTREAM_KEY` — the gateway
   proxies to whatever OpenAI-compatible upstream you configure; without a real one the nightly's
   model-calling sections fail honestly (see below).
 - **A real analytics source** for cockpit `/connect` — until one is connected, metric ingestion
   reports `skipped`, not failed.
+- **A real video-generation key + the Kling wire adapter** — the video section is fully built and
+  two-gate (approved storyboard → generated video lands as a new draft), but its transport is
+  injectable-only: the real Kling adapter (wire format + per-unit pricing) is written when the key
+  exists. Until then the section skips honestly ("no video source connected" / "no video transport
+  configured").
 - **Hosting / the platform layer** — container-per-business, the wake webhook + HMAC, `TrustPolicy`,
   and push notifications remain deferred to the real platform layer (a founder decision).
 
 ---
 
 ## 10. What was actually executed (acceptance)
+
+> **Provenance note:** this acceptance was executed at stage 6d, when the nightly had FIVE
+> sections. The system now runs the TEN sections listed in §6 and writes the per-night activity
+> diary — the added sections all follow the same honest-degrade contract shown below (each skips
+> or fails with a real reason; the sweep still exits 0). The commands in this table are unchanged
+> and remain the runbook's acceptance path.
 
 The core loop below was run end-to-end against a **scratch** DB
 (`file:D:/Dionysus/data/dogfood-scratch.db`), then the scratch DB and logs were deleted. Results:
