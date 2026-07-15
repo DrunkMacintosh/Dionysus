@@ -152,3 +152,50 @@ describe("sdk harness tool-turn guard", () => {
     });
   });
 });
+
+// 6m: a per-call OUTPUT-token bound. A runaway/reasoning-heavy model must not
+// generate unbounded output on our budget — every create() carries max_tokens
+// (the default 8192, or the def's maxOutputTokens override).
+describe("sdk harness output-token bound (6m)", () => {
+  async function captureBodies(run: (url: string) => Promise<void>): Promise<Array<Record<string, unknown>>> {
+    const bodies: Array<Record<string, unknown>> = [];
+    const srv = http.createServer(async (req, res) => {
+      let body = ""; for await (const c of req) body += c;
+      bodies.push(JSON.parse(body) as Record<string, unknown>);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ id: "1", object: "chat.completion", created: 0, model: "m",
+        choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "done" } }] }));
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    const port = (srv.address() as { port: number }).port;
+    try { await run(`http://127.0.0.1:${port}/v1`); } finally { srv.close(); }
+    return bodies;
+  }
+
+  const plainDef = (extra: Partial<AgentDef> = {}): AgentDef => ({
+    name: "plain", model: "m", instructions: "sys", tools: [], ...extra });
+
+  it("runAgent sends max_tokens 8192 by default", async () => {
+    const bodies = await captureBodies(async (url) => {
+      const harness = createSdkHarness({ baseUrl: url, apiKey: "k" });
+      await harness.runAgent(plainDef(), "go");
+    });
+    expect(bodies[0]!["max_tokens"]).toBe(8192);
+  });
+
+  it("runAgent honors an explicit per-agent maxOutputTokens override", async () => {
+    const bodies = await captureBodies(async (url) => {
+      const harness = createSdkHarness({ baseUrl: url, apiKey: "k" });
+      await harness.runAgent(plainDef({ maxOutputTokens: 512 }), "go");
+    });
+    expect(bodies[0]!["max_tokens"]).toBe(512);
+  });
+
+  it("completeOnce sends the default max_tokens 8192 (it has no def to override)", async () => {
+    const bodies = await captureBodies(async (url) => {
+      const harness = createSdkHarness({ baseUrl: url, apiKey: "k" });
+      await harness.completeOnce("m", "sys", "user");
+    });
+    expect(bodies[0]!["max_tokens"]).toBe(8192);
+  });
+});

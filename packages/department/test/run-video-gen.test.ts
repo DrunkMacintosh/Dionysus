@@ -243,4 +243,20 @@ describe("runVideoGen (two-gate: approved storyboards -> proposed video-post + v
     expect(await videoPostCount(BIZ)).toBe(0);
     expect(await costRowCount(BIZ)).toBe(0);
   });
+
+  it("BUDGET FAIL-CLOSED: eligible storyboard + source + transport but cap 0 -> REJECTS with the budget message; transport never called; zero rows", async () => {
+    // The budget gate fires AFTER eligibility/source/transport but BEFORE any generation — a cap-0
+    // night with everything else ready must throw fail-closed and touch nothing.
+    const BIZ = "biz_videogen_budget";
+    const wpId = await seedTenant(BIZ);
+    await addStoryboard(BIZ, wpId);
+    await connectVideo(BIZ, "https://kling.example/api", "sk-real-key");
+    await prisma.business.update({ where: { id: BIZ }, data: { maxTokensPerDay: 0 } });
+    const calls: Recorded[] = [];
+    await expect(runVideoGen({ businessId: BIZ }, { transport: fakeTransport({ url: "https://cdn.example/v.mp4" }, calls) }))
+      .rejects.toThrow(/budget/i);
+    expect(calls).toHaveLength(0);           // transport never reached (budget precedes the per-item loop)
+    expect(await videoPostCount(BIZ)).toBe(0);
+    expect(await costRowCount(BIZ)).toBe(0);
+  });
 });

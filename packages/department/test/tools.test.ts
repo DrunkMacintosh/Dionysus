@@ -38,6 +38,16 @@ describe("webSearch (Tavily, injectable transport)", () => {
     await expect(webSearch("q", { apiKey: "tavily-key", transport: async () => ({ status: 500, body: "" }) }))
       .rejects.toThrow("Tavily search failed: HTTP 500");
   });
+
+  it("a 200 with results:[] returns [] (an honest zero-result search, NOT a throw)", async () => {
+    const results = await webSearch("q", { apiKey: "tavily-key", transport: async () => ({ status: 200, body: JSON.stringify({ results: [] }) }) });
+    expect(results).toEqual([]);
+  });
+
+  it("throws unrecognized-shape on a 200 whose JSON has no results key (silence would fake 'nothing found')", async () => {
+    await expect(webSearch("q", { apiKey: "tavily-key", transport: async () => ({ status: 200, body: JSON.stringify({ foo: 1 }) }) }))
+      .rejects.toThrow("Tavily search failed: unrecognized response shape");
+  });
 });
 
 describe("fetchPageFenced", () => {

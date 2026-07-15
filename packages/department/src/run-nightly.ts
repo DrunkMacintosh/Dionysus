@@ -39,7 +39,7 @@ import { runCro } from "./run-cro.js";
 import { runSeo } from "./run-seo.js";
 import { runOutreach } from "./run-outreach.js";
 import { runVideoGen, type VideoGenTransport } from "./run-video-gen.js";
-import { draftWaypoint } from "./draft-waypoint.js";
+import { draftWaypoint, NON_COPYWRITER_TYPES } from "./draft-waypoint.js";
 import { proposeRoute } from "./propose-route.js";
 
 export type NightlyDeps = {
@@ -243,8 +243,11 @@ export async function runNightly(identity: Identity, deps: NightlyDeps): Promise
     const routeForDrafts = await prisma.route.findFirst({ where: { businessId }, orderBy: { createdAt: "desc" } });
     const activeWp = routeForDrafts ? await prisma.routeWaypoint.findFirst({
       where: { businessId, routeId: routeForDrafts.id, status: "active" }, orderBy: { order: "asc" } }) : null;
+    // 6m: exclude the non-copywriter artifact types (SAME shared list draftWaypoint's own `notIn`
+    // uses) so an assetless cro-fix/outreach-pitch/seo-audit/video-post orphan no longer triggers a
+    // no-op draftWaypoint call that drafts nothing and reports "0 draft(s) ready" instead of skipped.
     const undrafted = activeWp ? await prisma.routeAction.count({
-      where: { businessId, waypointId: activeWp.id, status: "proposed", assetId: null } }) : 0;
+      where: { businessId, waypointId: activeWp.id, status: "proposed", assetId: null, type: { notIn: NON_COPYWRITER_TYPES } } }) : 0;
     if (!activeWp || undrafted === 0) {
       drafts = { status: "skipped", reason: "nothing undrafted on the active waypoint" };
     } else {

@@ -25,6 +25,11 @@ import type { AgentDef, AgentRunResult, Harness, ToolDef } from "./types.js";
 // Safety bound so a misbehaving model cannot loop forever (D34 cost/fail-closed).
 const MAX_TOOL_TURNS = 8;
 
+// Per-call OUTPUT-token bound (D34 cost/fail-closed): a runaway or reasoning-heavy
+// model must not generate unbounded output on our budget. 8192 clears the largest
+// observed real output (~3.6k) with 2x headroom; a def may override via maxOutputTokens.
+const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
+
 /**
  * Minimal zod-object -> JSON-Schema conversion for tool `parameters`.
  * Covers the primitives department tools use (string/number/boolean/enum/array/
@@ -106,6 +111,7 @@ export function createSdkHarness(opts: { baseUrl: string; apiKey: string }): Har
         const res = await client.chat.completions.create({
           model: def.model,
           messages,
+          max_tokens: def.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
           ...(tools.length > 0 ? { tools } : {}),
         });
         const choice = res.choices[0];
@@ -144,6 +150,7 @@ export function createSdkHarness(opts: { baseUrl: string; apiKey: string }): Har
     async completeOnce(model: string, system: string, user: string): Promise<string> {
       const res = await client.chat.completions.create({
         model,
+        max_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
         messages: [
           { role: "system", content: system },
           { role: "user", content: user },

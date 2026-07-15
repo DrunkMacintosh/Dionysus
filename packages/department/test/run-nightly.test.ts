@@ -141,6 +141,41 @@ describe("runNightly", () => {
     expect(rows).toHaveLength(1);
     expect(JSON.parse(rows[0]!.sectionsJson)).toHaveProperty("video");
   });
+
+  it("no no-op draft night: an active waypoint whose ONLY undrafted action is a cro-fix -> drafts skipped, zero draft calls", async () => {
+    // Isolate the drafts section. The active waypoint carries a proposed, ASSETLESS cro-fix (a CRO
+    // artifact, not copywriter content — e.g. from a partial persist failure). Suppress the two
+    // sections that would otherwise add a draftable proposal: radar (empty HN signals -> zero
+    // proposals, zero model calls) and the learn recommender (a standing, already-drafted
+    // recommendation makes recommendNextAction return null). With the cro-fix excluded from the
+    // undrafted count, the drafts section must report `skipped`, NOT fire a no-op draftWaypoint that
+    // drafts nothing and reports "0 draft(s) ready".
+    const wp = await prisma.routeWaypoint.findFirst({ where: { businessId: A.businessId, status: "active" } });
+    // A standing recommendation from a prior night, ALREADY drafted (bound asset): it suppresses a
+    // fresh recommendation AND is excluded from the undrafted count (assetId not null).
+    const rec = await prisma.routeAction.create({ data: {
+      businessId: A.businessId, waypointId: wp!.id, employeeRole: "copywriter", type: "post", status: "proposed",
+      featuresJson: JSON.stringify({ channel: "hackernews", recommender: true }) } });
+    const recAsset = await prisma.asset.create({ data: {
+      businessId: A.businessId, channel: "hackernews", kind: "post", routeActionId: rec.id,
+      contentJson: JSON.stringify({ title: "t", body: "b" }) } });
+    await prisma.routeAction.update({ where: { id: rec.id }, data: { assetId: recAsset.id } });
+    // The orphan: a proposed, assetless cro-fix.
+    await prisma.routeAction.create({ data: {
+      businessId: A.businessId, waypointId: wp!.id, employeeRole: "cro", type: "cro-fix", status: "proposed",
+      featuresJson: JSON.stringify({ channel: "landing" }) } });
+
+    const emptyHn: HnTransport = async () => ({ status: 200, body: JSON.stringify({ hits: [] }) });
+    const inputs: string[] = [];
+    const recordingHarness: Harness = {
+      async runAgent(_def: AgentDef, input: string) { inputs.push(input); return { finalOutput: "{}" }; },
+      async completeOnce() { return "unused"; },
+    };
+    const res = await runNightly(A, { harness: recordingHarness, models: { brain: "fake" }, hnTransport: emptyHn });
+
+    expect(res.drafts).toMatchObject({ status: "skipped", reason: "nothing undrafted on the active waypoint" });
+    expect(inputs.some((i) => i.includes("Action: draft"))).toBe(false); // no no-op draftWaypoint model call
+  });
 });
 
 // ── Stage 6f: the nightly PLAN section (bootstrap the first route) ────────────

@@ -28,6 +28,7 @@ import type { Harness } from "./llm/types.js";
 import { loadPrompt } from "./prompts.js";
 import { fence } from "./tools/fetch-page.js";
 import { parseRouteProposal } from "./plan-schemas.js";
+import { isVideoChannel } from "./video-channels.js";
 
 export type ProposeRouteInput = { objective: ObjectiveInput; caseId: string; existingObjectiveId?: string };
 export type ProposeRouteDeps = { harness: Harness; models: { brain: string } };
@@ -81,9 +82,14 @@ export async function proposeRoute(identity: Identity, input: ProposeRouteInput,
     const { waypointId } = await persistWaypoint(identity, { routeId, order, title: w.title, goal: w.goal });
     const actions: RoutePlan["waypoints"][number]["actions"] = [];
     for (const a of w.actions) {
+      // 6m: video-channel actions belong to the Videographer — clamp the role
+      // server-side so its craft beliefs accrue under the right employee (the
+      // model's self-assigned role is advisory, like channel/kind labels).
+      const actionChannel = typeof a.features?.["channel"] === "string" ? (a.features["channel"] as string) : a.type;
+      const employeeRole = isVideoChannel(actionChannel) ? "videographer" : a.employeeRole;
       const { actionId } = await upsertRouteAction(identity, {
-        waypointId, employeeRole: a.employeeRole, type: a.type, rationale: a.rationale, features: a.features ?? {} });
-      actions.push({ actionId, employeeRole: a.employeeRole, type: a.type, rationale: a.rationale });
+        waypointId, employeeRole, type: a.type, rationale: a.rationale, features: a.features ?? {} });
+      actions.push({ actionId, employeeRole, type: a.type, rationale: a.rationale });
     }
     waypoints.push({ waypointId, order, title: w.title, goal: w.goal, actions });
   }

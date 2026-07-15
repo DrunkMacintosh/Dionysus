@@ -8,6 +8,18 @@
 // (Provider history: Brave until 2026-07-16 — its key is no longer free. See
 // docs/superpowers/specs/2026-07-16-tavily-search-provider-design.md.)
 import { request } from "undici";
+import { z } from "zod";
+
+// A genuine Tavily search response carries a `results` array (empty is a valid
+// zero-result search). `results` is REQUIRED: a 200 body without it is NOT a
+// search response, so we throw rather than fake "nothing found" with a silent [].
+const TavilyResponseSchema = z.object({
+  results: z.array(z.object({
+    title: z.string().optional(),
+    url: z.string().optional(),
+    content: z.string().optional(),
+  })),
+});
 
 export type SearchResult = { title: string; url: string; snippet: string };
 export type SearchTransport = (
@@ -39,10 +51,12 @@ export async function webSearch(
     JSON.stringify({ query, max_results: RESULT_COUNT }),
   );
   if (res.status !== 200) throw new Error(`Tavily search failed: HTTP ${res.status}`);
-  const parsed = JSON.parse(res.body) as {
-    results?: Array<{ title?: string; url?: string; content?: string }>;
-  };
-  return (parsed.results ?? []).flatMap((r) =>
+  // JSON.parse failure propagates as before. A 200 that parses but does not match the
+  // response shape (no `results` array, or not an object) throws — a silent [] would fake
+  // "nothing found". `{"results":[]}` is a valid, honest zero-result search.
+  const parsed = TavilyResponseSchema.safeParse(JSON.parse(res.body));
+  if (!parsed.success) throw new Error("Tavily search failed: unrecognized response shape");
+  return parsed.data.results.flatMap((r) =>
     r.url ? [{ title: r.title ?? "", url: r.url, snippet: r.content ?? "" }] : [],
   );
 }

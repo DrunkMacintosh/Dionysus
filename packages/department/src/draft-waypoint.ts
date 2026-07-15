@@ -30,6 +30,13 @@ import { loadPrompt } from "./prompts.js";
 import { parseDraft } from "./draft-schemas.js";
 import { parseStoryboard } from "./storyboard-schemas.js";
 import { fence } from "./tools/fetch-page.js";
+import { isVideoChannel } from "./video-channels.js";
+
+// The types that are NOT copywriter content: a cro-fix is the CRO's own artifact, an
+// outreach-pitch is runOutreach's (page-grounded), an seo-audit is runSeo's deterministic
+// checklist, and a video-post is runVideoGen's generated-video artifact. Exported so the nightly
+// drafts-count filter shares the SAME list as this file's `notIn` — no drift possible (6m item 4).
+export const NON_COPYWRITER_TYPES = ["cro-fix", "outreach-pitch", "seo-audit", "video-post"];
 
 export type DraftDeps = { harness: Harness; models: { brain: string } };
 export type DraftResult = {
@@ -57,12 +64,6 @@ function safeLabel(value: string): string {
   return value.replace(/[\x00-\x1F\x7F]/g, " ").replace(/\s+/g, " ").trim().slice(0, 60);
 }
 
-// Stage 6i: video channels route to the Videographer (a storyboard the founder
-// can film), not the Copywriter. Server-derived from features.channel — the
-// model never picks its own router.
-const VIDEO_CHANNELS = new Set(["tiktok", "reels", "shorts", "youtube-shorts", "instagram-reels", "video"]);
-const isVideoChannel = (channel: string): boolean => VIDEO_CHANNELS.has(channel.toLowerCase().trim());
-
 // Fixed server-side rendering of the parsed storyboard — the asset body.
 function formatStoryboard(sb: { scenes: Array<{ shot: string; text: string }>; caption: string }): string {
   const lines = sb.scenes.map((s, i) => `${i + 1}. [${s.shot}] ${s.text}`);
@@ -86,7 +87,7 @@ export async function draftWaypoint(identity: Identity, input: { waypointId: str
   // none is copywriter content, so an assetless one (e.g. from a partial persist failure) must
   // not be re-drafted into a semantically-wrong post.
   const actions = await prisma.routeAction.findMany({
-    where: { waypointId: input.waypointId, businessId: identity.businessId, status: "proposed", assetId: null, type: { notIn: ["cro-fix", "outreach-pitch", "seo-audit", "video-post"] } } });
+    where: { waypointId: input.waypointId, businessId: identity.businessId, status: "proposed", assetId: null, type: { notIn: NON_COPYWRITER_TYPES } } });
 
   // Stage 5b: recall the route so far. MIRROR-then-READ, hoisted ONCE before the fan-out
   // (the route context is identical for every action of this waypoint). mirrorPlanToGraph

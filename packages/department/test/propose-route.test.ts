@@ -123,4 +123,41 @@ describe("proposeRoute", () => {
       { harness: fakeHarness(), models: { brain: "fake" } })).rejects.toThrow(/not found/i);
     expect(await prisma.route.count({ where: { businessId: caller } })).toBe(0); // fail-closed: no route persisted
   });
+
+  it("clamps a video-channel action to the videographer role server-side; a non-video action keeps the model's role", async () => {
+    const biz = "biz_route_clamp";
+    await prisma.routeAction.deleteMany({ where: { businessId: biz } });
+    await prisma.routeWaypoint.deleteMany({ where: { businessId: biz } });
+    await prisma.route.deleteMany({ where: { businessId: biz } });
+    await prisma.objective.deleteMany({ where: { businessId: biz } });
+    await prisma.business.upsert({ where: { id: biz },
+      create: { id: biz, name: "Clamp Co", maxTokensPerDay: 100000 }, update: { maxTokensPerDay: 100000 } });
+    const rc = await persistCase({ businessId: biz }, { name: "C", platform: "hn", mode: "m", rank: 1, historicalArc: [], modernizedPlan: {}, insight: "i", sources: [], confidence: 0.5 });
+    // The model MISLABELS a tiktok action as the copywriter's; the server must clamp its role to
+    // the Videographer so craft beliefs accrue under the right employee. A non-video action keeps
+    // the model's self-assigned role (advisory, like the channel/kind labels).
+    const clampHarness: Harness = {
+      async runAgent() {
+        return { finalOutput: JSON.stringify({ waypoints: [
+          { title: "Video + text", goal: "reach the goal",
+            actions: [
+              { employeeRole: "copywriter", type: "post", rationale: "a short video for tiktok", features: { channel: "tiktok" } },
+              { employeeRole: "copywriter", type: "post", rationale: "a blog post", features: { channel: "blog" } },
+            ] },
+        ] }) };
+      },
+      async completeOnce() { return "unused"; },
+    };
+    const plan = await proposeRoute({ businessId: biz },
+      { objective: { kind: "signups", target: "100", metric: "users" }, caseId: rc.caseId },
+      { harness: clampHarness, models: { brain: "fake" } });
+
+    const videoAction = await prisma.routeAction.findFirst({ where: { businessId: biz, featuresJson: { contains: '"channel":"tiktok"' } } });
+    expect(videoAction?.employeeRole).toBe("videographer"); // clamped server-side, not the model's "copywriter"
+    const textAction = await prisma.routeAction.findFirst({ where: { businessId: biz, featuresJson: { contains: '"channel":"blog"' } } });
+    expect(textAction?.employeeRole).toBe("copywriter"); // the model's role kept for a non-video action
+    // The returned plan reflects the clamp too (not just the persisted row).
+    const returnedVideo = plan.waypoints[0]!.actions.find((a) => a.rationale.includes("short video"));
+    expect(returnedVideo?.employeeRole).toBe("videographer");
+  });
 });
