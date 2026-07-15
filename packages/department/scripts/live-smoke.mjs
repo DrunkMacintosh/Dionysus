@@ -2,7 +2,7 @@
 //
 // This script IS the live test — there is no unit test for it. It drives
 // discover() end-to-end through the LOCAL D28 gateway (which forwards to
-// NVIDIA's hosted API), using real Brave + NVIDIA keys the founder supplies.
+// NVIDIA's hosted API), using real Tavily + NVIDIA keys the founder supplies.
 //
 // Acceptance for the gated task: it exists, builds against dist/, and
 // FAIL-CLOSES (exit 1) when any required env var — or the product-url arg — is
@@ -14,7 +14,7 @@ import { discover } from "../dist/discover.js";
 
 const need = (k) => { const v = process.env[k]; if (!v) { console.error(`Missing ${k} — refusing to run.`); process.exit(1); } return v; };
 const businessId = need("DIONYSUS_BUSINESS_ID");
-need("BRAVE_API_KEY");
+need("TAVILY_API_KEY");
 const gatewayUrl = process.env.GATEWAY_LOCAL_URL ?? "http://127.0.0.1:8787/v1";
 const brain = process.env.DEPARTMENT_BRAIN_MODEL ?? "nvidia/nemotron-3-super-120b-a12b";
 const productUrl = process.argv[2];
@@ -22,7 +22,7 @@ if (!productUrl) { console.error("Usage: pnpm smoke <product-url>"); process.exi
 
 const harness = createSdkHarness({ baseUrl: gatewayUrl, apiKey: process.env.GATEWAY_TOKEN ?? "local" });
 const brief = await discover({ businessId }, productUrl, {
-  harness, models: { brain, judge: brain }, searchApiKey: process.env.BRAVE_API_KEY,
+  harness, models: { brain, judge: brain }, searchApiKey: process.env.TAVILY_API_KEY,
 });
 console.log(JSON.stringify(brief, null, 2));
 console.log(`\nCases: ${brief.cases.length}. Check the LlmCall ledger for gateway-metered rows (note="gateway").`);

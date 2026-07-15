@@ -15,7 +15,7 @@ import { scrapeLadder } from "dionysus-mcp/lib/scrape/ladder";
 import type { SafeFetchOptions } from "dionysus-mcp/lib/ssrf";
 
 // D20 break-out defense. Attacker-controlled content (page title / description
-// / text), a fetched url, a Brave search snippet, or a scraped product blurb can
+// / text), a fetched url, a Tavily search snippet, or a scraped product blurb can
 // itself contain the literal fence markers. If a forged `<<<END-UNTRUSTED-CONTENT>>>`
 // survived INSIDE the fenced region, a downstream model would see the fence close
 // early and read everything after it as trusted instructions. We defang any

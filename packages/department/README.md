@@ -43,7 +43,7 @@ Set these in the shell that runs `pnpm --filter department smoke <product-url>`:
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
 | `DIONYSUS_BUSINESS_ID` | **yes** | — | Ambient identity (D27.1). A `Business` row with this id must exist (see setup below). |
-| `BRAVE_API_KEY` | **yes** | — | Brave Search key for the historian's `web_search` tool. |
+| `TAVILY_API_KEY` | **yes** | — | Tavily Search key for the historian's `web_search` tool. |
 | `GATEWAY_LOCAL_URL` | no | `http://127.0.0.1:8787/v1` | Base URL of the **local** gateway the department calls. |
 | `DEPARTMENT_BRAIN_MODEL` | no | `nvidia/nemotron-3-super-120b-a12b` | Model id used for both the brain (historian/strategist) and the citation judge. |
 | `GATEWAY_TOKEN` | no | `local` is sent if unset | Inbound token for the gateway. If the gateway is started with `GATEWAY_TOKEN`, set the **same** value here so the call is accepted. |
@@ -70,8 +70,9 @@ Set these in the shell that runs the gateway (a separate process/terminal):
 
 1. **NVIDIA API key** (`nvapi-…`) — create at **build.nvidia.com** (sign in → API
    keys). This is the gateway's `GATEWAY_UPSTREAM_KEY`.
-2. **Brave Search API key** — create at **brave.com/search/api** (subscribe to a plan;
-   the free tier is enough to smoke-test). This is the department's `BRAVE_API_KEY`.
+2. **Tavily Search API key** — create at **tavily.com** (the free Researcher tier is
+   1,000 credits/month, no credit card — enough to smoke-test). This is the department's
+   `TAVILY_API_KEY`.
 
 Never commit either key. They are supplied via environment only.
 
@@ -95,7 +96,7 @@ pre-check passes and discovery proceeds.
 
 ### Run order (summary)
 
-1. Create the NVIDIA `nvapi-…` key and the Brave key (above).
+1. Create the NVIDIA `nvapi-…` key and the Tavily key (above).
 2. Create the `Business` row for your `DIONYSUS_BUSINESS_ID`.
 3. `pnpm --filter department build` and `pnpm --filter dionysus-mcp build`.
 4. Terminal A — start the gateway with its env contract:

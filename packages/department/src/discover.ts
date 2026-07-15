@@ -88,7 +88,7 @@ export async function discover(
       name: "web_search",
       description: "Search the web. Returns JSON results.",
       parameters: z.object({ query: z.string() }),
-      // D20: Brave titles/snippets are attacker-influenceable — fence the raw
+      // D20: Tavily titles/snippets are attacker-influenceable — fence the raw
       // results as untrusted DATA before they reach the historian's prompt.
       execute: async (a) =>
         fence(
