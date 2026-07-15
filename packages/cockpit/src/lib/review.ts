@@ -100,8 +100,10 @@ export async function listSendQueue(identity: Identity): Promise<SendCard[]> {
     // to verify. An seo-audit (Stage 6h) is a deterministic on-page checklist the founder applies
     // to their OWN page by hand — apply-checklist semantics, like cro-fix. A storyboard (Stage 6i)
     // is filmed and posted by hand — no public-URL verified-send contract for a hand-posted video
-    // yet. None enters the send queue. (All still reach /drafts via listProposedDrafts, inclusive.)
-    if (asset.kind === "cro-fix" || asset.kind === "outreach-pitch" || asset.kind === "seo-audit" || asset.kind === "storyboard") continue;
+    // yet. A video (Stage 6k) is a generated clip the founder downloads and posts by hand — the
+    // video verified-send contract is deferred, so it is not a queue send either. None enters the
+    // send queue. (All still reach /drafts via listProposedDrafts, inclusive.)
+    if (asset.kind === "cro-fix" || asset.kind === "outreach-pitch" || asset.kind === "seo-audit" || asset.kind === "storyboard" || asset.kind === "video") continue;
     const wp = await prisma.routeWaypoint.findFirst({ where: { id: action.waypointId, businessId: identity.businessId } });
     let title: string | null = null;
     let body: string | null = null;
@@ -394,7 +396,7 @@ export async function listPitchRequests(identity: Identity): Promise<PitchReques
 // the ONLY businessId in play — another tenant's diary is impossible to reach.
 // NOT an MCP tool (the whitelist stays 11).
 // ---------------------------------------------------------------------------
-const SECTION_ORDER = ["plan", "radar", "metrics", "learn", "strategy", "cro", "seo", "outreach", "drafts"];
+const SECTION_ORDER = ["plan", "radar", "metrics", "learn", "strategy", "cro", "seo", "outreach", "video", "drafts"];
 
 export type ActivitySection = { section: string; status: "ok" | "skipped" | "failed"; text: string };
 export type ActivityRun = { runId: string; ranAt: Date; sections: ActivitySection[] };

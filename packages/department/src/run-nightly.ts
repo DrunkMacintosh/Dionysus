@@ -1,5 +1,5 @@
-// Stage 6a/6b/6c/6e/6f/6g/6h — the NIGHTLY WAKE (the D30 platform-trigger slice). One unattended routine
-// per business, NINE best-effort + independent sections in order: PLAN (6f: the bootstrap — a
+// Stage 6a/6b/6c/6e/6f/6g/6h/6k — the NIGHTLY WAKE (the D30 platform-trigger slice). One unattended routine
+// per business, TEN best-effort + independent sections in order: PLAN (6f: the bootstrap — a
 // founder-stated objective with no route yet gets its FIRST route proposed from the best
 // discovered case, so it runs BEFORE the rest can see the new route) → radar sensing (4e) →
 // metric ingestion (5d) → LEARN (6b: refresh craft+performance beliefs, then recommend the
@@ -9,10 +9,13 @@
 // SEO (6h: the SEO/AEO Strategist runs a fully DETERMINISTIC on-page audit of the founder's own
 // page — zero model calls by construction, page-change deduped) →
 // OUTREACH (6g: draft the founder's pending pitch requests, each grounded in the target's page —
-// founder-targeted only, never invents a target) → DRAFTS (6b: draft the undrafted proposals so
-// the founder wakes to a reviewable morning briefing). CRO, SEO and OUTREACH run BEFORE drafts on
-// purpose: they persist COMPLETE (asset-bound) proposals, so the drafts section's assetless-only
-// filter never re-drafts a CRO finding, an SEO audit or an outreach pitch. All under the
+// founder-targeted only, never invents a target) → VIDEO (6k: the Videographer's generation phase,
+// two-gate — a founder-APPROVED storyboard becomes a generated video via a connected video
+// Integration + an injected transport, landing as a NEW proposed video-post the founder reviews
+// before posting; honest skip without a source or transport) → DRAFTS (6b: draft the undrafted
+// proposals so the founder wakes to a reviewable morning briefing). CRO, SEO, OUTREACH and VIDEO run
+// BEFORE drafts on purpose: they persist COMPLETE (asset-bound) proposals, so the drafts section's
+// assetless-only filter never re-drafts a CRO finding, an SEO audit, an outreach pitch or a video. All under the
 // business's OWN ambient identity (D27.1). The sweep is the platform operator: it iterates
 // businesses but never mixes tenants, and one business's failure NEVER blocks the next
 // (per-business isolation, summary-reported). Budget stays fail-closed INSIDE
@@ -35,6 +38,7 @@ import { runRadar } from "./run-radar.js";
 import { runCro } from "./run-cro.js";
 import { runSeo } from "./run-seo.js";
 import { runOutreach } from "./run-outreach.js";
+import { runVideoGen, type VideoGenTransport } from "./run-video-gen.js";
 import { draftWaypoint } from "./draft-waypoint.js";
 import { proposeRoute } from "./propose-route.js";
 
@@ -46,18 +50,19 @@ export type NightlyDeps = {
   croFetchOpts?: SafeFetchOptions;   // test seam; production uses the real SSRF-guarded page fetch
   seoFetchOpts?: SafeFetchOptions;   // test seam; production uses the real SSRF-guarded page fetch (zero-model audit)
   outreachFetchOpts?: SafeFetchOptions; // test seam; production uses the real SSRF-guarded target-page fetch
+  videoGenTransport?: VideoGenTransport; // test seam; production defaults to the deferred Kling adapter (absent → the video section skips)
 };
 export type SectionResult =
   | { status: "ok"; detail: string }
   | { status: "skipped"; reason: string }
   | { status: "failed"; reason: string };
-export type NightlyBusinessResult = { businessId: string; plan: SectionResult; radar: SectionResult; metrics: SectionResult; learn: SectionResult; strategy: SectionResult; cro: SectionResult; seo: SectionResult; outreach: SectionResult; drafts: SectionResult };
+export type NightlyBusinessResult = { businessId: string; plan: SectionResult; radar: SectionResult; metrics: SectionResult; learn: SectionResult; strategy: SectionResult; cro: SectionResult; seo: SectionResult; outreach: SectionResult; video: SectionResult; drafts: SectionResult };
 
 function failureReason(error: unknown): string {
   return error instanceof Error ? error.message : "unknown error";
 }
 
-/** One business's night: plan → radar → metrics → learn → strategy → cro → seo → outreach → drafts, each best-effort — never throws to the caller. */
+/** One business's night: plan → radar → metrics → learn → strategy → cro → seo → outreach → video → drafts, each best-effort — never throws to the caller. */
 export async function runNightly(identity: Identity, deps: NightlyDeps): Promise<NightlyBusinessResult> {
   const businessId = identity.businessId;
   // ONE clock for the whole night — the learn section's boundary time, matching draftWaypoint's
@@ -210,6 +215,25 @@ export async function runNightly(identity: Identity, deps: NightlyDeps): Promise
     outreach = { status: "failed", reason: failureReason(error) };
   }
 
+  // VIDEO — the Videographer's generation phase (6k, two-gate): approved
+  // storyboards become generated videos, landing as NEW proposed video-post
+  // drafts. Honest skips without a connected source or transport. Runs AFTER
+  // outreach and BEFORE drafts: it persists COMPLETE (asset-bound) video-post
+  // proposals, so the drafts section's assetless-only filter never re-drafts one
+  // (and draftWaypoint excludes the type outright). The transport is injected
+  // (the Kling seam); absent in production until the founder-keyed follow-up, so
+  // the section skips honestly. Budget refusal throws inside runVideoGen and is
+  // reported failed.
+  let video: SectionResult;
+  try {
+    const res = await runVideoGen(identity, deps.videoGenTransport ? { transport: deps.videoGenTransport } : {});
+    video = res.status === "ok"
+      ? { status: "ok", detail: `${res.generated.length} video(s) generated, ${res.skippedItems} skipped${res.awaiting > 0 ? `, ${res.awaiting} awaiting (cap)` : ""}` }
+      : { status: "skipped", reason: res.reason };
+  } catch (error: unknown) {
+    video = { status: "failed", reason: failureReason(error) };
+  }
+
   // DRAFTS — the morning briefing: draft any undrafted proposals on the active waypoint so the
   // founder wakes to REVIEWABLE drafts (never-auto: they are still `proposed`). draftWaypoint is
   // budget-fail-closed FIRST and skips bound proposals (founder edits are sacred). Runs LAST so the
@@ -231,7 +255,7 @@ export async function runNightly(identity: Identity, deps: NightlyDeps): Promise
     drafts = { status: "failed", reason: failureReason(error) }; // incl. budget fail-closed
   }
 
-  const result = { businessId, plan, radar, metrics, learn, strategy, cro, seo, outreach, drafts };
+  const result = { businessId, plan, radar, metrics, learn, strategy, cro, seo, outreach, video, drafts };
 
   // 6j — the activity diary: persist the night's section results VERBATIM so the
   // founder can see what ran, what was skipped, and why (/activity). BEST-EFFORT:
@@ -266,6 +290,7 @@ export async function runNightlySweep(deps: NightlyDeps): Promise<NightlyBusines
         cro: { status: "failed", reason: failureReason(error) },
         seo: { status: "failed", reason: failureReason(error) },
         outreach: { status: "failed", reason: failureReason(error) },
+        video: { status: "failed", reason: failureReason(error) },
         drafts: { status: "failed", reason: failureReason(error) } });
     }
   }

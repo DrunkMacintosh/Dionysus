@@ -127,6 +127,20 @@ describe("runNightly", () => {
     expect(res.seo).toBeDefined();
     expect(res.seo).toMatchObject({ status: "skipped", reason: "no product page on record" });
   });
+
+  it("the video section skips (honestly) when there are no approved storyboards; the tenth section is recorded in the diary", async () => {
+    // The standard fixture (Alpha Co) has ZERO approved storyboards → runVideoGen's eligibility-first
+    // check returns skipped BEFORE any integration/budget/transport call (and no transport is wired
+    // here anyway). Two-gate: with nothing the founder has APPROVED, nothing is generated.
+    // (The generation path — an approved storyboard + a connected source — is the T4 eval gate's job.)
+    const res = await runNightly(A, { harness: goodHarness(), models: { brain: "fake" }, hnTransport });
+    expect(res.video).toBeDefined();
+    expect(res.video).toMatchObject({ status: "skipped", reason: "no approved storyboards awaiting generation" });
+    // The tenth section lands in the verbatim diary (the 6j section map is derived from the result).
+    const rows = await prisma.nightlyRun.findMany({ where: { businessId: A.businessId } });
+    expect(rows).toHaveLength(1);
+    expect(JSON.parse(rows[0]!.sectionsJson)).toHaveProperty("video");
+  });
 });
 
 // ── Stage 6f: the nightly PLAN section (bootstrap the first route) ────────────

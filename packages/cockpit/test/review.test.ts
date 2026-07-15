@@ -490,6 +490,66 @@ describe("storyboard send-queue exclusion (6i)", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Video send-queue exclusion (Stage 6k) — a video asset is a generated clip the
+// FOUNDER downloads and posts by hand (the video verified-send contract is deferred),
+// so listSendQueue EXCLUDES kind:"video" (the storyboard/cro/outreach/seo apply-by-hand
+// semantics). listProposedDrafts stays INCLUSIVE so the generated video still reaches
+// /drafts for the founder's gate-2 review.
+// ---------------------------------------------------------------------------
+const SENDGEN = { businessId: "biz_cockpit_sendgen" };
+
+describe("video send-queue exclusion / drafts inclusion (6k)", () => {
+  let approvedPostId = "";
+  let approvedVideoId = "";
+  let proposedVideoId = "";
+
+  beforeAll(async () => {
+    await prisma.asset.deleteMany({ where: { businessId: SENDGEN.businessId } });
+    await prisma.routeAction.deleteMany({ where: { businessId: SENDGEN.businessId } });
+    await prisma.routeWaypoint.deleteMany({ where: { businessId: SENDGEN.businessId } });
+    await prisma.route.deleteMany({ where: { businessId: SENDGEN.businessId } });
+    await prisma.objective.deleteMany({ where: { businessId: SENDGEN.businessId } });
+    await prisma.business.upsert({ where: { id: SENDGEN.businessId }, create: { id: SENDGEN.businessId, name: SENDGEN.businessId }, update: {} });
+    const obj = await prisma.objective.create({ data: { businessId: SENDGEN.businessId, kind: "signups", target: "100", metric: "users", status: "active" } });
+    const route = await prisma.route.create({ data: { businessId: SENDGEN.businessId, objectiveId: obj.id, source: "case", status: "active" } });
+    const wp = await prisma.routeWaypoint.create({ data: { businessId: SENDGEN.businessId, routeId: route.id, order: 1, title: "Launch", goal: "go live", status: "active" } });
+
+    // Assets bind only while "proposed" (setActionAsset's bind-guard): bind first, then move status.
+    const seedBound = async (employeeRole: string, type: string, channel: string, kind: string, content: { title?: string; body?: string }) => {
+      const action = await prisma.routeAction.create({ data: { businessId: SENDGEN.businessId, waypointId: wp.id, employeeRole, type, status: "proposed" } });
+      const { assetId } = await persistAsset(SENDGEN, { channel, kind, content, routeActionId: action.id });
+      await setActionAsset(SENDGEN, action.id, assetId);
+      return action.id;
+    };
+
+    // A normal approved post (a real send) → MUST appear in the send queue.
+    approvedPostId = await seedBound("copywriter", "post", "hackernews", "post", { title: "Show HN", body: "We built X" });
+    await prisma.routeAction.update({ where: { id: approvedPostId }, data: { status: "approved" } });
+
+    // An APPROVED video (the founder downloads + posts by hand) → EXCLUDED from the queue.
+    approvedVideoId = await seedBound("videographer", "video-post", "tiktok", "video", { title: "The hook", body: "Video: https://cdn.example/v.mp4\n\nCaption: follow" });
+    await prisma.routeAction.update({ where: { id: approvedVideoId }, data: { status: "approved" } });
+
+    // A PROPOSED video → still reaches /drafts for gate-2 review (inclusive).
+    proposedVideoId = await seedBound("videographer", "video-post", "tiktok", "video", { title: "Take two", body: "Video: https://cdn.example/w.mp4" });
+  });
+
+  it("listSendQueue excludes the approved video while the normal approved post still appears", async () => {
+    const queue = await listSendQueue(SENDGEN);
+    const ids = queue.map((c) => c.actionId);
+    expect(ids).toContain(approvedPostId);     // a real send stays sendable
+    expect(ids).not.toContain(approvedVideoId); // a hand-posted generated video is never a queue send
+  });
+
+  it("listProposedDrafts stays inclusive — the proposed video reaches /drafts for gate-2 review", async () => {
+    const drafts = await listProposedDrafts(SENDGEN);
+    const card = drafts.find((d) => d.actionId === proposedVideoId);
+    expect(card).toBeDefined();
+    expect(card).toMatchObject({ type: "video-post", channel: "tiktok", title: "Take two" });
+  });
+});
+
 describe("isRenderableHttpUrl (verified-history href guard)", () => {
   it("accepts http/https and rejects javascript:/data:/garbage/empty (stored-XSS guard)", () => {
     expect(isRenderableHttpUrl("https://example.com/x")).toBe(true);
@@ -932,13 +992,15 @@ describe("listNightlyActivity (the /activity read)", () => {
     malformedId = (await prisma.nightlyRun.create({ data: { businessId: ACT.businessId,
       ranAt: new Date("2026-07-11T00:00:00.000Z"), sectionsJson: "{not valid json" } })).id;
 
-    // Newer night (LATEST ranAt): keys inserted OUT of SECTION_ORDER (drafts, plan,
-    // mystery) — the read must reorder known keys to SECTION_ORDER and place the unknown
-    // "mystery" key AFTER them. drafts genuinely FAILED; its real reason must surface verbatim.
+    // Newer night (LATEST ranAt): keys inserted OUT of SECTION_ORDER (drafts, video, plan,
+    // mystery) — the read must reorder known keys to SECTION_ORDER (the tenth section `video`
+    // slots between outreach's position and drafts) and place the unknown "mystery" key AFTER
+    // them. drafts genuinely FAILED; its real reason must surface verbatim.
     newerId = (await prisma.nightlyRun.create({ data: { businessId: ACT.businessId,
       ranAt: new Date("2026-07-12T00:00:00.000Z"),
       sectionsJson: JSON.stringify({
         drafts: { status: "failed", reason: "budget cap 0 blocked drafts" },
+        video: { status: "ok", detail: "1 video(s) generated, 0 skipped" },
         plan: { status: "ok", detail: "planned tonight" },
         mystery: { status: "skipped", reason: "unknown section" },
       }) } })).id;
@@ -958,13 +1020,17 @@ describe("listNightlyActivity (the /activity read)", () => {
     expect(runs[1]!.runId).toBe(olderId);
     expect(runs[0]!.ranAt).toBeInstanceOf(Date);
 
-    // Known keys reordered to SECTION_ORDER (plan before drafts), unknown "mystery" AFTER.
-    expect(runs[0]!.sections.map((s) => s.section)).toEqual(["plan", "drafts", "mystery"]);
+    // Known keys reordered to SECTION_ORDER (plan → video → drafts), unknown "mystery" AFTER.
+    expect(runs[0]!.sections.map((s) => s.section)).toEqual(["plan", "video", "drafts", "mystery"]);
 
     // The failed section surfaces its REAL reason verbatim — no softening, no ok-washing.
     const drafts = runs[0]!.sections.find((s) => s.section === "drafts")!;
     expect(drafts.status).toBe("failed");
     expect(drafts.text).toBe("budget cap 0 blocked drafts");
+
+    // The tenth section (video, 6k) renders verbatim, ordered between outreach's slot and drafts.
+    const video = runs[0]!.sections.find((s) => s.section === "video")!;
+    expect(video).toMatchObject({ status: "ok", text: "1 video(s) generated, 0 skipped" });
 
     const plan = runs[0]!.sections.find((s) => s.section === "plan")!;
     expect(plan).toMatchObject({ status: "ok", text: "planned tonight" });
