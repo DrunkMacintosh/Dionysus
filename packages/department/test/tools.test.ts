@@ -33,6 +33,11 @@ describe("webSearch (Tavily, injectable transport)", () => {
       if (saved !== undefined) process.env["TAVILY_API_KEY"] = saved;
     }
   });
+
+  it("throws on a non-200 response (fail closed, status in the message)", async () => {
+    await expect(webSearch("q", { apiKey: "tavily-key", transport: async () => ({ status: 500, body: "" }) }))
+      .rejects.toThrow("Tavily search failed: HTTP 500");
+  });
 });
 
 describe("fetchPageFenced", () => {
