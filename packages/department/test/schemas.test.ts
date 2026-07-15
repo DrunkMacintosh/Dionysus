@@ -22,4 +22,8 @@ describe("prompts", () => {
     const p = loadPrompt("historian");
     for (const s of ["EXTRACTED", "INFERRED", "UNTRUSTED-CONTENT"]) expect(p).toContain(s);
   });
+  it("historian prompt carries the research-frugality rule (execution-discovered: tool-loop context is quadratic)", () => {
+    const p = loadPrompt("historian");
+    for (const s of ["AT MOST 8 tool calls", "never re-fetch", "STOP researching"]) expect(p).toContain(s);
+  });
 });
