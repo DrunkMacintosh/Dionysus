@@ -249,8 +249,12 @@ discovery first":
 
 ```powershell
 . .\.env.dogfood.ps1
-pnpm -F department smoke        # node scripts/live-smoke.mjs — needs a working gateway upstream
+pnpm -F department smoke <product-url>   # node scripts/live-smoke.mjs — needs a working gateway upstream + TAVILY_API_KEY
 ```
+
+> **Measured (2026-07-16, live run):** one clean discovery costs **~100k tokens** — exactly the
+> default daily cap. Raise the cap for the discovery night (`provision <id> <name> <email> 200000`)
+> and lower it back afterwards, or the D28 gate will honestly kill the run partway.
 
 (A cockpit discovery button and founder case-picking are future work; the nightly takes the
 top-ranked case.)
