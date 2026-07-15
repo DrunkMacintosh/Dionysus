@@ -4,7 +4,7 @@ import { useActionState } from "react";
 import { approveDraft, rejectDraft, editDraft, type ActionResult } from "../actions";
 
 export type DraftCardProps = {
-  actionId: string; employeeRole: string; type: string;
+  actionId: string; employeeRole: string; type: string; kind: string;
   channel: string | null; title: string | null; body: string | null;
   waypointTitle: string; rationale: string | null; editDistance: number | null;
   simulation: { engagementScore: number | null; verdict: string | null; topConcerns: string[]; confidence: number; createdAt: Date } | null;
@@ -22,7 +22,7 @@ export function DraftCard(d: DraftCardProps) {
   return (
     <article style={{ border: "1px solid #ccc", borderRadius: 8, padding: 12, marginBottom: 12 }}>
       <p style={{ color: "#666", margin: 0 }}>
-        {d.waypointTitle} · {d.employeeRole} · {d.type} · {d.channel}
+        {d.waypointTitle} · {d.employeeRole} · {d.type} · {d.kind} · {d.channel}
         {d.editDistance != null ? ` · edit distance so far: ${d.editDistance}` : ""}
       </p>
       {d.title ? <h3>{d.title}</h3> : null}

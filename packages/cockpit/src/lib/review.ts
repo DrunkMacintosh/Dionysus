@@ -24,7 +24,7 @@ export async function getCmoReport(identity: Identity): Promise<CmoReport> {
 }
 
 export type DraftCard = {
-  actionId: string; employeeRole: string; type: string;
+  actionId: string; employeeRole: string; type: string; kind: string;
   channel: string | null; title: string | null; body: string | null;
   waypointTitle: string; rationale: string | null; editDistance: number | null;
   simulation: { engagementScore: number | null; verdict: string | null; topConcerns: string[]; confidence: number; createdAt: Date } | null;
@@ -67,7 +67,7 @@ export async function listProposedDrafts(identity: Identity): Promise<DraftCard[
       }
       simulation = { engagementScore, verdict, topConcerns, confidence: sim.confidence, createdAt: sim.createdAt };
     }
-    cards.push({ actionId: action.id, employeeRole: action.employeeRole, type: action.type,
+    cards.push({ actionId: action.id, employeeRole: action.employeeRole, type: action.type, kind: asset.kind,
       channel: asset.channel, title, body, waypointTitle: wp?.title ?? "", rationale: action.rationale,
       editDistance: action.editDistance, simulation });
   }

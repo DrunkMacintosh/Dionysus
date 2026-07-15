@@ -1121,3 +1121,42 @@ describe("connectVideoSourceAction (/connect video form)", () => {
     expect(JSON.stringify(list)).not.toContain(VIDEO_API_KEY);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Drafts kind label (Stage 6m) — an employee artifact (storyboard, video, cro-fix,
+// seo-audit, outreach-pitch) surfaces on /drafts under the ACTION's type (e.g.
+// "post"), which hides what the asset actually IS. listProposedDrafts now carries
+// the asset's `kind` so the card can label a storyboard as a storyboard, not a post.
+// ---------------------------------------------------------------------------
+const KIND = { businessId: "biz_cockpit_draftkind" };
+
+describe("drafts kind label (listProposedDrafts carries asset.kind)", () => {
+  let storyboardActionId = "";
+
+  beforeAll(async () => {
+    await prisma.asset.deleteMany({ where: { businessId: KIND.businessId } });
+    await prisma.routeAction.deleteMany({ where: { businessId: KIND.businessId } });
+    await prisma.routeWaypoint.deleteMany({ where: { businessId: KIND.businessId } });
+    await prisma.route.deleteMany({ where: { businessId: KIND.businessId } });
+    await prisma.objective.deleteMany({ where: { businessId: KIND.businessId } });
+    await prisma.business.upsert({ where: { id: KIND.businessId }, create: { id: KIND.businessId, name: KIND.businessId }, update: {} });
+    const obj = await prisma.objective.create({ data: { businessId: KIND.businessId, kind: "signups", target: "100", metric: "users", status: "active" } });
+    const route = await prisma.route.create({ data: { businessId: KIND.businessId, objectiveId: obj.id, source: "case", status: "active" } });
+    const wp = await prisma.routeWaypoint.create({ data: { businessId: KIND.businessId, routeId: route.id, order: 1, title: "Launch", goal: "go live", status: "active" } });
+
+    // A proposed action typed "post" (the action's type) bound to a storyboard asset
+    // (the asset's kind). Before 6m the card showed only "post"; now the view carries the kind.
+    const action = await prisma.routeAction.create({ data: { businessId: KIND.businessId, waypointId: wp.id, employeeRole: "videographer", type: "post", status: "proposed" } });
+    const { assetId } = await persistAsset(KIND, { channel: "tiktok", kind: "storyboard", content: { title: "The hook", body: "1. [open on phone] hi" }, routeActionId: action.id });
+    await setActionAsset(KIND, action.id, assetId);
+    storyboardActionId = action.id;
+  });
+
+  it("a storyboard-bound draft's view carries kind 'storyboard' (not just the action type)", async () => {
+    const drafts = await listProposedDrafts(KIND);
+    const card = drafts.find((d) => d.actionId === storyboardActionId);
+    expect(card).toBeDefined();
+    expect(card!.type).toBe("post");       // the action type, unchanged
+    expect(card!.kind).toBe("storyboard"); // the asset kind — the new label (6m)
+  });
+});
